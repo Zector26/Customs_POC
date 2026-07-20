@@ -1,6 +1,7 @@
 """
-Ingest ไฟล์ข้อมูลจริง (.csv หรือ .xlsx) เข้า DuckDB คอลัมน์ในไฟล์ต้องมีชื่อตรงกับ schema เป๊ะ
-(เรียงลำดับต่างกันได้): DECL_ID, TRFCLS, GDSDSC, GDSDSCTH, BANNME, PCETHB, CIFVALTHB
+Ingest ไฟล์ข้อมูลจริง (.csv หรือ .xlsx) เข้า DuckDB ต้องมีคอลัมน์ TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB
+เป็นอย่างน้อย (เรียงลำดับต่างกันได้, DECL_ID ไม่บังคับ — สร้างให้อัตโนมัติถ้าไม่มี, คอลัมน์อื่นที่มีเกินมา
+เช่น BANNME/PCETHB จะถูกข้ามไปเฉยๆ ไม่ error)
 
 ตัวอย่าง:
     python ingest.py data/real_declarations.csv --replace
