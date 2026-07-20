@@ -27,7 +27,7 @@ import pandas as pd
 DB_PATH = "data/customs.duckdb"
 # ราคา/มูลค่าที่ใช้เทียบหา anomaly คือ CIFVALTHB (มูลค่า CIF รวม) ไม่ใช่ PCETHB — ไฟล์ข้อมูลจริงบางไฟล์ไม่มี
 # PCETHB (ราคาต่อหน่วย) ให้เชื่อถือได้ จึงตัดออกจาก schema ไปเลย ใช้ CIFVALTHB เป็นตัวเดียว
-DECLARATION_COLUMNS = ["DECL_ID", "TRFCLS", "GDSDSC", "GDSDSCTH", "BANNME", "CIFVALTHB"]
+DECLARATION_COLUMNS = ["DECL_ID", "TRFCLS", "GDSDSC", "GDSDSCTH", "CIFVALTHB"]
 # DECL_ID ไม่บังคับต้องมีในไฟล์ต้นทาง (ไฟล์ export จริงหลายระบบไม่มีคอลัมน์เลขที่ใบขนสินค้าให้) — ถ้าไม่มี
 # จะสร้างให้อัตโนมัติตอน ingest (ดู _ensure_decl_id) คอลัมน์ที่เหลือยังบังคับต้องมีครบ
 REQUIRED_INPUT_COLUMNS = [c for c in DECLARATION_COLUMNS if c != "DECL_ID"]
@@ -58,7 +58,6 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             TRFCLS BIGINT,
             GDSDSC VARCHAR,
             GDSDSCTH VARCHAR,
-            BANNME VARCHAR,
             CIFVALTHB DOUBLE,
             TEXT_HASH VARCHAR,
             HEADING VARCHAR
@@ -156,7 +155,7 @@ def _insert_chunk(con: duckdb.DuckDBPyConnection, chunk: pd.DataFrame, row_offse
     head_sql = heading_sql()
     con.execute(f"""
         INSERT INTO declarations
-        SELECT DECL_ID, TRFCLS, GDSDSC, GDSDSCTH, BANNME, CIFVALTHB,
+        SELECT DECL_ID, TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB,
                md5({text_sql}) AS TEXT_HASH, {head_sql} AS HEADING
         FROM _chunk
     """)
@@ -190,7 +189,7 @@ def ingest_csv(con: duckdb.DuckDBPyConnection, csv_path: str, chunk_size: int = 
 def ingest_xlsx(con: duckdb.DuckDBPyConnection, xlsx_path: str, chunk_size: int = 200_000, replace: bool = False, sheet_name=None, on_chunk=None) -> int:
     """อ่าน .xlsx แบบ streaming ด้วย openpyxl (read_only=True) แทน pandas.read_excel ซึ่งโหลดทั้ง sheet
     เข้า memory ทีเดียว — จำเป็นมากสำหรับไฟล์ Excel ระดับล้านแถว แถวแรกของ sheet ต้องเป็นหัวคอลัมน์ตรงกับ
-    {TRFCLS, GDSDSC, GDSDSCTH, BANNME, CIFVALTHB} เป็นอย่างน้อย (เรียงลำดับต่างกันได้, DECL_ID ไม่บังคับ)"""
+    {TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB} เป็นอย่างน้อย (เรียงลำดับต่างกันได้, DECL_ID ไม่บังคับ)"""
     import openpyxl
 
     if replace:
@@ -442,7 +441,7 @@ def count_alerts(con: duckdb.DuckDBPyConnection, heading: str) -> int:
 
 def query_alerts_page(con: duckdb.DuckDBPyConnection, heading: str, limit: int = 50, offset: int = 0) -> pd.DataFrame:
     return con.execute("""
-        SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.BANNME,
+        SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC,
                r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB
         FROM cluster_results r
         JOIN declarations d ON r.DECL_ID = d.DECL_ID
@@ -455,7 +454,7 @@ def query_alerts_page(con: duckdb.DuckDBPyConnection, heading: str, limit: int =
 def export_alerts_csv(con: duckdb.DuckDBPyConnection, heading: str, out_path: str) -> int:
     con.execute("""
         COPY (
-            SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.BANNME,
+            SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC,
                    r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB
             FROM cluster_results r
             JOIN declarations d ON r.DECL_ID = d.DECL_ID

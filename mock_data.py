@@ -5,7 +5,6 @@ Mock Data Generator - ข้อมูลใบขนสินค้า (Customs 
     TRFCLS      พิกัดศุลกากร (tariff code)
     GDSDSC      ชนิดของสินค้า (ภาษาอังกฤษ)
     GDSDSCTH    ชนิดของสินค้า (ภาษาไทย)
-    BANNME      เครื่องหมายการค้า (brand)
     CIFVALTHB   มูลค่า CIF รวม (บาท) - ใช้เทียบหา anomaly เท่านั้น ไม่ใช้เป็น feature ตอนจัดกลุ่ม
                 (ยังคง generate PCETHB ไว้ในไฟล์ output ด้วยเพื่อความสมจริง แต่ pipeline การ ingest จริง
                 ไม่อ่านคอลัมน์นี้ ไม่ต้องมีก็ได้)
@@ -185,7 +184,6 @@ def generate_mock_data(n_per_group: int = 20, anomaly_ratio: float = 0.07, seed:
             "TRFCLS": trfcls,
             "GDSDSC": en_desc,
             "GDSDSCTH": th_desc,
-            "BANNME": brand,
             "PCETHB": np.round(unit_price, 2),
             "CIFVALTHB": np.round(unit_price * quantity, 2),
         }))

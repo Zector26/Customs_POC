@@ -120,7 +120,6 @@ with tab_test:
         col1, col2 = st.columns(2)
         with col1:
             in_trfcls = st.text_input("TRFCLS (พิกัดศุลกากร)", value="8504403090")
-            in_bannme = st.text_input("BANNME (เครื่องหมายการค้า) — ไม่ใช้ในโมเดล แสดงไว้เพื่ออ้างอิง", value="")
         with col2:
             in_gdsdsc = st.text_input("GDSDSC (ชนิดของสินค้า ภาษาอังกฤษ)", value="Mobile phone charger adapter 20W USB-C")
             in_gdsdscth = st.text_input("GDSDSCTH (ชนิดของสินค้า ภาษาไทย)", value="เครื่องชาร์จโทรศัพท์มือถือ 20W USB-C")
