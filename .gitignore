@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+data/
+models/
+*.duckdb
+seed_data/*.csv
+seed_data/*.xlsx
+!seed_data/.gitkeep
+.pytest_cache/

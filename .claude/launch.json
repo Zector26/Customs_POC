@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bertopic-streamlit-app",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless", "true", "--server.fileWatcherType", "none", "--server.port", "8503"],
+      "port": 8503
+    }
+  ]
+}

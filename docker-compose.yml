@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    image: customs-bertopic:latest
+    ports:
+      - "8501:8501"
+    volumes:
+      - customs-data:/app/data
+      - customs-models:/app/models
+      - customs-hf-cache:/app/.cache/huggingface
+      - ./seed_data:/app/seed_data:ro   # วางไฟล์ข้อมูลเริ่มต้น (.csv/.xlsx) ไว้ในโฟลเดอร์นี้บน host
+    environment:
+      - DATA_PATH=/app/seed_data/input.xlsx   # เปลี่ยนชื่อไฟล์ให้ตรงกับที่วางจริงใน ./seed_data
+      # - DATA_SHEET=Sheet1                          # ถ้าไฟล์เป็น .xlsx และไม่ใช่ sheet แรก
+      # - FORCE_RETRAIN=1                            # บังคับ ingest+เทรนใหม่ทุกครั้งที่ container start
+      # - TRAIN_ARGS=--sample-cap 30000 --nr-topics 8 # พารามิเตอร์เพิ่มเติมส่งต่อให้ train.py
+    restart: unless-stopped
+
+volumes:
+  customs-data:
+  customs-models:
+  customs-hf-cache:

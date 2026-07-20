@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+.claude/
+data/
+models/
+*.csv
+*.xlsx
+.pytest_cache/
+*.duckdb
