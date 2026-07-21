@@ -466,3 +466,38 @@ def export_alerts_csv(con: duckdb.DuckDBPyConnection, heading: str, out_path: st
         ) TO '{path}' (HEADER, ENCODING UTF8)
     """.format(path=out_path), {"heading": heading})
     return con.execute(f"SELECT count(*) FROM read_csv('{out_path}')").fetchone()[0]
+
+
+def count_topic_items(con: duckdb.DuckDBPyConnection, heading: str, topic: int) -> int:
+    return con.execute(
+        "SELECT count(*) FROM cluster_results WHERE HEADING = ? AND TOPIC = ?", [heading, topic]
+    ).fetchone()[0]
+
+
+def query_topic_items_page(
+    con: duckdb.DuckDBPyConnection, heading: str, topic: int, limit: int = 50, offset: int = 0,
+) -> pd.DataFrame:
+    """ดึงทุกแถว (ไม่กรองแค่ alert) ของ topic นี้ภายใน heading — ใช้ดูว่ากลุ่มนี้จับสินค้าอะไรมารวมกันบ้าง"""
+    return con.execute("""
+        SELECT d.DECL_ID, d.TRFCLS, d.GDSDSCTH, d.GDSDSC,
+               d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB, r.ALERT_ANOMALY
+        FROM cluster_results r
+        JOIN declarations d ON r.DECL_ID = d.DECL_ID
+        WHERE r.HEADING = ? AND r.TOPIC = ?
+        ORDER BY d.CIFVALTHB ASC
+        LIMIT ? OFFSET ?
+    """, [heading, topic, limit, offset]).df()
+
+
+def export_topic_items_csv(con: duckdb.DuckDBPyConnection, heading: str, topic: int, out_path: str) -> int:
+    con.execute("""
+        COPY (
+            SELECT d.DECL_ID, d.TRFCLS, d.GDSDSCTH, d.GDSDSC,
+                   d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB, r.ALERT_ANOMALY
+            FROM cluster_results r
+            JOIN declarations d ON r.DECL_ID = d.DECL_ID
+            WHERE r.HEADING = $heading AND r.TOPIC = $topic
+            ORDER BY d.CIFVALTHB ASC
+        ) TO '{path}' (HEADER, ENCODING UTF8)
+    """.format(path=out_path), {"heading": heading, "topic": topic})
+    return con.execute(f"SELECT count(*) FROM read_csv('{out_path}')").fetchone()[0]

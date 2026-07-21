@@ -29,6 +29,7 @@ st.caption(
 )
 
 ALERTS_PAGE_SIZE = 50
+TOPIC_ITEMS_PAGE_SIZE = 50
 
 
 @st.cache_resource(show_spinner="กำลังโหลด sentence-transformer model...")
@@ -87,6 +88,45 @@ with tab_view:
             if len(counts):
                 fig_bar = px.bar(counts, x="TOPIC", y="COUNT", text="COUNT")
                 st.plotly_chart(fig_bar, width="stretch")
+
+                st.markdown("**ดูรายการสินค้าในแต่ละ topic**")
+                topic_options = counts.sort_values("COUNT", ascending=False)["TOPIC"].tolist()
+                view_topic = st.selectbox(
+                    "เลือก topic", topic_options,
+                    format_func=lambda t: f"topic {t} ({counts.loc[counts['TOPIC'] == t, 'COUNT'].iloc[0]:,} รายการ)"
+                    + (" — noise/ไม่เข้ากลุ่มไหน" if t == -1 else ""),
+                    key=f"topic_select_{view_heading}",
+                )
+                total_topic_items = db.count_topic_items(con, view_heading, int(view_topic))
+                n_topic_pages = max(1, -(-total_topic_items // TOPIC_ITEMS_PAGE_SIZE))
+                topic_page = st.number_input(
+                    f"หน้า (1-{n_topic_pages}, {total_topic_items:,} รายการทั้งหมดใน topic นี้)",
+                    min_value=1, max_value=n_topic_pages, value=1, key=f"topic_page_{view_heading}_{view_topic}",
+                )
+                topic_items = db.query_topic_items_page(
+                    con, view_heading, int(view_topic),
+                    limit=TOPIC_ITEMS_PAGE_SIZE, offset=(topic_page - 1) * TOPIC_ITEMS_PAGE_SIZE,
+                )
+                st.dataframe(
+                    topic_items.style.map(
+                        lambda v: "background-color: #ffcccc" if v is True else "",
+                        subset=["ALERT_ANOMALY"],
+                    ),
+                    width="stretch", height=300,
+                )
+
+                if st.button(f"⬇️ เตรียมไฟล์ดาวน์โหลด topic {view_topic} ของ heading นี้ (CSV)", key=f"dl_topic_{view_heading}_{view_topic}"):
+                    import tempfile
+                    with st.spinner(f"กำลัง export {total_topic_items:,} rows..."):
+                        with tempfile.TemporaryDirectory() as tmp_dir:
+                            out_path = str(Path(tmp_dir) / "topic_items.csv")
+                            db.export_topic_items_csv(con, view_heading, int(view_topic), out_path)
+                            csv_bytes = Path(out_path).read_bytes()
+                    st.download_button(
+                        "ดาวน์โหลด CSV", data=csv_bytes,
+                        file_name=f"topic_{view_topic}_{view_heading}.csv", mime="text/csv",
+                        key=f"dl_topic_btn_{view_heading}_{view_topic}",
+                    )
 
             st.markdown("**รายการที่ถูก Alert ว่ามูลค่า CIF ผิดปกติ** (เรียงมูลค่าต่ำสุดก่อน)")
             total_alerts = db.count_alerts(con, view_heading)
