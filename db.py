@@ -36,8 +36,11 @@ HEADING_DIGITS = 8  # TRFCLS 8 หลักแรก (AHTN) — fix ตายต
 
 def text_for_embedding_sql() -> str:
     """ข้อความสำหรับทำ embedding ไม่ต้องผนวก TRFCLS เข้าไปเหมือน repo เดิม เพราะการแบ่งตาม heading
-    (exact-match SQL) แยกพิกัดศุลกากรให้แล้วตั้งแต่ขั้นก่อนเข้าโมเดล — ใช้แค่คำอธิบายไทย/อังกฤษพอ"""
-    return "GDSDSCTH || ' . ' || GDSDSC"
+    (exact-match SQL) แยกพิกัดศุลกากรให้แล้วตั้งแต่ขั้นก่อนเข้าโมเดล — ใช้แค่คำอธิบายไทย/อังกฤษพอ
+    COALESCE กัน NULL ไว้ — ข้อมูลจริงบางแถวไม่มี GDSDSC หรือ GDSDSCTH กรอกไว้ ถ้าไม่กันไว้ การต่อ string
+    ใน SQL จะได้ผลเป็น NULL ทั้งเส้น (ไม่ใช่แค่ฝั่งที่หายไป) ทำให้ TEXT_HASH เป็น NULL ไปด้วย แล้วพังตอน
+    ส่งเข้า pandas/embedding ทีหลัง (NULL -> float('nan') -> TypeError ตอนต่อ string กับ EMBEDDING_PREFIX)"""
+    return "COALESCE(GDSDSCTH, '') || ' . ' || COALESCE(GDSDSC, '')"
 
 
 def heading_sql(trfcls_col: str = "TRFCLS") -> str:
