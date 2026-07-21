@@ -1,7 +1,11 @@
 """
 Ingest ไฟล์ข้อมูลจริง (.csv หรือ .xlsx) เข้า DuckDB ต้องมีคอลัมน์ TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB
-เป็นอย่างน้อย (เรียงลำดับต่างกันได้, DECL_ID ไม่บังคับ — สร้างให้อัตโนมัติถ้าไม่มี, คอลัมน์อื่นที่มีเกินมา
-เช่น BANNME/PCETHB จะถูกข้ามไปเฉยๆ ไม่ error)
+เป็นอย่างน้อย (เรียงลำดับต่างกันได้, DECL_ID ไม่บังคับ — สร้างให้อัตโนมัติถ้าไม่มี)
+
+คอลัมน์เสริม (ไม่บังคับ) ที่จะถูกอ่านและใช้งานถ้ามี: CTYOGN, WGT, WGTUNT, QTY, QTYUNT — โดย WGT+WGTUNT (ถ้า
+เป็นหน่วยที่รู้จัก ดู db.weight_unit_conversion) จะถูกแปลงเป็น WGT_KG แล้วใช้ "ราคาต่อกิโล" (CIFVALTHB /
+WGT_KG) เทียบ anomaly แทนมูลค่ารวมเฉยๆ (แม่นกว่า) ส่วน QTY/QTYUNT/CTYOGN เก็บไว้เป็น metadata เฉยๆ ไม่มีผล
+ต่อการคำนวณ — คอลัมน์อื่นที่มีเกินมานอกเหนือจากทั้งหมดนี้ (เช่น BANNME/PCETHB) จะถูกข้ามไปเฉยๆ ไม่ error
 
 ตัวอย่าง:
     python ingest.py data/real_declarations.csv --replace

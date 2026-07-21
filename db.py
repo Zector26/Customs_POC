@@ -28,10 +28,28 @@ DB_PATH = "data/customs.duckdb"
 # ราคา/มูลค่าที่ใช้เทียบหา anomaly คือ CIFVALTHB (มูลค่า CIF รวม) ไม่ใช่ PCETHB — ไฟล์ข้อมูลจริงบางไฟล์ไม่มี
 # PCETHB (ราคาต่อหน่วย) ให้เชื่อถือได้ จึงตัดออกจาก schema ไปเลย ใช้ CIFVALTHB เป็นตัวเดียว
 DECLARATION_COLUMNS = ["DECL_ID", "TRFCLS", "GDSDSC", "GDSDSCTH", "CIFVALTHB"]
+# คอลัมน์เสริม (ไม่บังคับต้องมีในไฟล์ต้นทาง) — CTYOGN/QTY/QTYUNT เก็บไว้เป็น metadata เฉยๆ (QTYUNT มีหน่วย
+# ปนกันมาก แปลงเทียบกันข้ามหน่วยไม่ได้) ส่วน WGT+WGTUNT ใช้คำนวณ WGT_KG (ดู weight_unit_conversion) เพื่อ
+# เอาไปหา "ราคาต่อกิโล" (CIFVALTHB / WGT_KG) เป็น anomaly metric ที่แม่นกว่ามูลค่ารวมเฉยๆ (ตัดผลจากปริมาณ
+# ที่สั่งออกไป) — ถ้าแถวไหนไม่มีข้อมูลน้ำหนักที่ใช้ได้ จะ fallback ไปเทียบ CIFVALTHB แบบเดิม
+OPTIONAL_INPUT_COLUMNS = ["CTYOGN", "WGT", "WGTUNT", "QTY", "QTYUNT"]
 # DECL_ID ไม่บังคับต้องมีในไฟล์ต้นทาง (ไฟล์ export จริงหลายระบบไม่มีคอลัมน์เลขที่ใบขนสินค้าให้) — ถ้าไม่มี
 # จะสร้างให้อัตโนมัติตอน ingest (ดู _ensure_decl_id) คอลัมน์ที่เหลือยังบังคับต้องมีครบ
 REQUIRED_INPUT_COLUMNS = [c for c in DECLARATION_COLUMNS if c != "DECL_ID"]
 HEADING_DIGITS = 8  # TRFCLS 8 หลักแรก (AHTN) — fix ตายตัวตามที่ตกลงไว้ ไม่ทำเป็น config
+
+# หน่วยน้ำหนัก (WGTUNT) -> factor แปลงเป็นกิโลกรัม เก็บจริงในตาราง weight_unit_conversion (ดู init_schema)
+# เพื่อให้เพิ่มหน่วยใหม่ในอนาคตได้ด้วยการ insert แถวเดียวเข้า DuckDB ไม่ต้องแก้โค้ด/deploy ใหม่ — ดิกนี้ใช้
+# แค่ seed ค่าเริ่มต้นตอนสร้างตารางครั้งแรกเท่านั้น
+DEFAULT_WEIGHT_UNIT_FACTORS = {"KGM": 1.0, "GRM": 0.001, "TNE": 1000.0}
+
+
+# คำ/วลี boilerplate ที่ร้านค้าออนไลน์ (Lazada/Shopee resell) แปะติดชื่อสินค้าแทบทุกตัวไม่ว่าสินค้าจะเป็น
+# อะไร (พบจริงจากตัวอย่าง production: สินค้าคนละแบบกันโดยสิ้นเชิงถูกจัดกลุ่มปนกันเพราะมีคำพวกนี้ติดท้าย
+# เหมือนกัน) — ข้อความสั้น ๆ ทำให้ embedding ให้น้ำหนักคำเหล่านี้สูงเทียบกับความยาวข้อความทั้งเส้น ต้องตัด
+# ออกก่อนทำ embedding เสมอ รายการนี้ต้องตรงกับ clustering_core._EMBEDDING_BOILERPLATE_PATTERNS เป๊ะ
+# (คนละภาษา คนละ regex engine เลยแยกเก็บ 2 ที่ ไม่ import ข้ามกัน)
+_EMBEDDING_BOILERPLATE_PATTERNS = [r"\bINTL\b", r"\bDIY\b", "นานาชาติ"]
 
 
 def text_for_embedding_sql() -> str:
@@ -39,8 +57,15 @@ def text_for_embedding_sql() -> str:
     (exact-match SQL) แยกพิกัดศุลกากรให้แล้วตั้งแต่ขั้นก่อนเข้าโมเดล — ใช้แค่คำอธิบายไทย/อังกฤษพอ
     COALESCE กัน NULL ไว้ — ข้อมูลจริงบางแถวไม่มี GDSDSC หรือ GDSDSCTH กรอกไว้ ถ้าไม่กันไว้ การต่อ string
     ใน SQL จะได้ผลเป็น NULL ทั้งเส้น (ไม่ใช่แค่ฝั่งที่หายไป) ทำให้ TEXT_HASH เป็น NULL ไปด้วย แล้วพังตอน
-    ส่งเข้า pandas/embedding ทีหลัง (NULL -> float('nan') -> TypeError ตอนต่อ string กับ EMBEDDING_PREFIX)"""
-    return "COALESCE(GDSDSCTH, '') || ' . ' || COALESCE(GDSDSC, '')"
+    ส่งเข้า pandas/embedding ทีหลัง (NULL -> float('nan') -> TypeError ตอนต่อ string กับ EMBEDDING_PREFIX)
+
+    ตัดคำ boilerplate ทิ้งก่อน (ดู _EMBEDDING_BOILERPLATE_PATTERNS) แล้วยุบช่องว่างซ้ำที่เหลือจากการตัด
+    หมายเหตุ: การแก้ค่านี้จะเปลี่ยนสูตร TEXT_HASH ไปด้วย ต้อง re-ingest ข้อมูลใหม่ (ไม่ใช่แค่ train.py) ถึงจะมีผล"""
+    expr = "COALESCE(GDSDSCTH, '') || ' . ' || COALESCE(GDSDSC, '')"
+    for pattern in _EMBEDDING_BOILERPLATE_PATTERNS:
+        escaped = pattern.replace("'", "''")
+        expr = f"regexp_replace({expr}, '{escaped}', '', 'gi')"
+    return f"trim(regexp_replace({expr}, '\\s+', ' ', 'g'))"
 
 
 def heading_sql(trfcls_col: str = "TRFCLS") -> str:
@@ -66,6 +91,12 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             HEADING VARCHAR
         )
     """)
+    # ตารางเก่า (สร้างก่อนมี CTYOGN/WGT/QTY) จะไม่ได้คอลัมน์พวกนี้จาก CREATE TABLE IF NOT EXISTS ข้างบน —
+    # ต้อง ALTER TABLE เพิ่มให้ทุกครั้งที่ init (idempotent, รันซ้ำได้ไม่ error) เพื่อ migrate DB ไฟล์เก่า
+    for col_def in [
+        "CTYOGN VARCHAR", "WGT DOUBLE", "WGTUNT VARCHAR", "WGT_KG DOUBLE", "QTY DOUBLE", "QTYUNT VARCHAR",
+    ]:
+        con.execute(f"ALTER TABLE declarations ADD COLUMN IF NOT EXISTS {col_def}")
     con.execute("CREATE INDEX IF NOT EXISTS idx_declarations_hash ON declarations(TEXT_HASH)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_declarations_heading ON declarations(HEADING)")
     con.execute("""
@@ -85,7 +116,21 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             ALERT_ANOMALY BOOLEAN
         )
     """)
+    for col_def in [
+        "GROUP_MEAN_PRICE_PER_KG DOUBLE", "ALERT_THRESHOLD_PRICE_PER_KG DOUBLE", "ALERT_METRIC VARCHAR",
+    ]:
+        con.execute(f"ALTER TABLE cluster_results ADD COLUMN IF NOT EXISTS {col_def}")
     con.execute("CREATE INDEX IF NOT EXISTS idx_cluster_results_heading ON cluster_results(HEADING)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS weight_unit_conversion (
+            WGTUNT VARCHAR PRIMARY KEY,
+            FACTOR_TO_KG DOUBLE
+        )
+    """)
+    for unit, factor in DEFAULT_WEIGHT_UNIT_FACTORS.items():
+        con.execute(
+            "INSERT INTO weight_unit_conversion VALUES (?, ?) ON CONFLICT DO NOTHING", [unit, factor]
+        )
     con.execute("""
         CREATE TABLE IF NOT EXISTS heading_meta (
             HEADING VARCHAR PRIMARY KEY,
@@ -108,6 +153,29 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             TRAINED_AT VARCHAR
         )
     """)
+
+
+# =========================================================
+# หน่วยน้ำหนัก — lookup ตาราง weight_unit_conversion (ดู init_schema สำหรับ seed ค่าเริ่มต้น)
+# =========================================================
+
+def list_known_weight_units(con: duckdb.DuckDBPyConnection) -> list[str]:
+    return [r[0] for r in con.execute(
+        "SELECT WGTUNT FROM weight_unit_conversion ORDER BY WGTUNT"
+    ).fetchall()]
+
+
+def convert_weight_to_kg(con: duckdb.DuckDBPyConnection, wgt: float | None, wgtunt: str | None) -> float | None:
+    """แปลงน้ำหนักเป็นกิโลกรัมด้วย factor จากตาราง weight_unit_conversion — คืน None ถ้าไม่มีน้ำหนักมาให้
+    หรือ wgtunt ไม่อยู่ในตาราง (หน่วยที่ไม่รู้จัก ไม่ error แค่บอกว่าแปลงไม่ได้)"""
+    if wgt is None or wgtunt is None:
+        return None
+    row = con.execute(
+        "SELECT FACTOR_TO_KG FROM weight_unit_conversion WHERE WGTUNT = ?", [wgtunt]
+    ).fetchone()
+    if row is None:
+        return None
+    return wgt * row[0]
 
 
 def row_count(con: duckdb.DuckDBPyConnection) -> int:
@@ -152,15 +220,23 @@ def _ensure_decl_id(chunk: pd.DataFrame, row_offset: int) -> pd.DataFrame:
 
 def _insert_chunk(con: duckdb.DuckDBPyConnection, chunk: pd.DataFrame, row_offset: int) -> None:
     chunk = _ensure_decl_id(chunk, row_offset)
-    chunk = chunk[DECLARATION_COLUMNS]
+    chunk = chunk.copy()
+    for col in OPTIONAL_INPUT_COLUMNS:
+        if col not in chunk.columns:
+            chunk[col] = None
+    chunk = chunk[DECLARATION_COLUMNS + OPTIONAL_INPUT_COLUMNS]
     con.register("_chunk", chunk)
     text_sql = text_for_embedding_sql()
-    head_sql = heading_sql()
+    head_sql = heading_sql("c.TRFCLS")
     con.execute(f"""
         INSERT INTO declarations
-        SELECT DECL_ID, TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB,
-               md5({text_sql}) AS TEXT_HASH, {head_sql} AS HEADING
-        FROM _chunk
+            (DECL_ID, TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB, TEXT_HASH, HEADING,
+             CTYOGN, WGT, WGTUNT, WGT_KG, QTY, QTYUNT)
+        SELECT c.DECL_ID, c.TRFCLS, c.GDSDSC, c.GDSDSCTH, c.CIFVALTHB,
+               md5({text_sql}) AS TEXT_HASH, {head_sql} AS HEADING,
+               c.CTYOGN, c.WGT, c.WGTUNT, c.WGT * w.FACTOR_TO_KG AS WGT_KG, c.QTY, c.QTYUNT
+        FROM _chunk c
+        LEFT JOIN weight_unit_conversion w ON c.WGTUNT = w.WGTUNT
     """)
     con.unregister("_chunk")
 
@@ -192,7 +268,8 @@ def ingest_csv(con: duckdb.DuckDBPyConnection, csv_path: str, chunk_size: int = 
 def ingest_xlsx(con: duckdb.DuckDBPyConnection, xlsx_path: str, chunk_size: int = 200_000, replace: bool = False, sheet_name=None, on_chunk=None) -> int:
     """อ่าน .xlsx แบบ streaming ด้วย openpyxl (read_only=True) แทน pandas.read_excel ซึ่งโหลดทั้ง sheet
     เข้า memory ทีเดียว — จำเป็นมากสำหรับไฟล์ Excel ระดับล้านแถว แถวแรกของ sheet ต้องเป็นหัวคอลัมน์ตรงกับ
-    {TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB} เป็นอย่างน้อย (เรียงลำดับต่างกันได้, DECL_ID ไม่บังคับ)"""
+    {TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB} เป็นอย่างน้อย (เรียงลำดับต่างกันได้, DECL_ID ไม่บังคับ) — คอลัมน์
+    เสริม CTYOGN/WGT/WGTUNT/QTY/QTYUNT จะถูกอ่านด้วยถ้ามีอยู่ใน header (ดู OPTIONAL_INPUT_COLUMNS)"""
     import openpyxl
 
     if replace:
@@ -206,7 +283,7 @@ def ingest_xlsx(con: duckdb.DuckDBPyConnection, xlsx_path: str, chunk_size: int 
     missing = [c for c in REQUIRED_INPUT_COLUMNS if c not in header]
     if missing:
         raise ValueError(f"ไฟล์ .xlsx ขาดคอลัมน์: {missing} (ต้องมีครบ {REQUIRED_INPUT_COLUMNS}, DECL_ID ไม่บังคับจะสร้างให้อัตโนมัติถ้าไม่มี)")
-    available_cols = [c for c in DECLARATION_COLUMNS if c in header]
+    available_cols = [c for c in DECLARATION_COLUMNS + OPTIONAL_INPUT_COLUMNS if c in header]
     col_idx = {name: header.index(name) for name in available_cols}
 
     total = 0
@@ -319,14 +396,15 @@ def persist_heading_result(
     con.register("_hash_topic", hash_to_topic)
     con.execute("""
         CREATE OR REPLACE TEMP TABLE _decl_topic AS
-        SELECT d.DECL_ID, d.CIFVALTHB, ht.TOPIC
+        SELECT d.DECL_ID, d.CIFVALTHB, d.WGT_KG, ht.TOPIC
         FROM declarations d
         JOIN _hash_topic ht ON d.TEXT_HASH = ht.TEXT_HASH
         WHERE d.HEADING = ?
     """, [heading])
     con.unregister("_hash_topic")
 
-    noise_filter = "WHERE TOPIC != -1" if exclude_noise else ""
+    base_conditions = ["TOPIC != -1"] if exclude_noise else []
+    noise_filter = f"WHERE {' AND '.join(base_conditions)}" if base_conditions else ""
     group_agg = con.execute(f"""
         SELECT TOPIC,
                avg(CIFVALTHB) AS MEAN_PRICE,
@@ -349,25 +427,59 @@ def persist_heading_result(
         ])
         return {"group_stats": {}, "n_rows": n_rows, "n_topics": 0, "n_flagged": 0}
 
+    # ราคาต่อกิโล (CIFVALTHB / WGT_KG) เป็น anomaly metric สำรอง — แม่นกว่ามูลค่ารวมเฉยๆ เพราะตัดผลจาก
+    # ปริมาณที่สั่งออกไป คำนวณเฉพาะแถวที่มี WGT_KG ใช้ได้ (มี WGT+WGTUNT ที่รู้จัก แปลงเป็นกิโลได้) ถ้า
+    # heading นี้ไม่มีแถวไหนมีน้ำหนักเลย group_agg_kg จะว่างเปล่า — join กับมันได้ปกติ ได้ NULL ทุกแถว
+    # (fallback ไปใช้ CIFVALTHB แบบเดิมเอง ไม่ต้อง special-case)
+    kg_conditions = base_conditions + ["WGT_KG IS NOT NULL", "WGT_KG > 0"]
+    group_agg_kg = con.execute(f"""
+        SELECT TOPIC,
+               avg(CIFVALTHB / WGT_KG) AS MEAN_PRICE_PER_KG,
+               stddev_samp(CIFVALTHB / WGT_KG) AS STD_PRICE_PER_KG,
+               median(CIFVALTHB / WGT_KG) AS MEDIAN_PRICE_PER_KG,
+               quantile_cont(ln(CIFVALTHB / WGT_KG), 0.25) AS LOG_Q1_KG,
+               quantile_cont(ln(CIFVALTHB / WGT_KG), 0.75) AS LOG_Q3_KG,
+               count(*) AS N_WITH_WEIGHT
+        FROM _decl_topic
+        WHERE {' AND '.join(kg_conditions)}
+        GROUP BY TOPIC
+    """).df()
+
     if method == "ratio":
         group_agg["THRESHOLD"] = group_agg["MEAN_PRICE"] * alert_below_ratio
+        group_agg_kg["THRESHOLD_PER_KG"] = group_agg_kg["MEAN_PRICE_PER_KG"] * alert_below_ratio
     elif method == "iqr":
         lower_log = group_agg["LOG_Q1"] - iqr_k * (group_agg["LOG_Q3"] - group_agg["LOG_Q1"])
         group_agg["THRESHOLD"] = np.exp(lower_log)
+        lower_log_kg = group_agg_kg["LOG_Q1_KG"] - iqr_k * (group_agg_kg["LOG_Q3_KG"] - group_agg_kg["LOG_Q1_KG"])
+        group_agg_kg["THRESHOLD_PER_KG"] = np.exp(lower_log_kg)
     else:
         raise ValueError(f"unknown method: {method}")
 
     con.register("_group_agg", group_agg[["TOPIC", "MEAN_PRICE", "THRESHOLD"]])
+    con.register("_group_agg_kg", group_agg_kg[["TOPIC", "MEAN_PRICE_PER_KG", "THRESHOLD_PER_KG"]])
     con.execute("""
-        INSERT INTO cluster_results (DECL_ID, HEADING, TOPIC, GROUP_MEAN_CIFVALTHB, ALERT_THRESHOLD_CIFVALTHB, ALERT_ANOMALY)
+        INSERT INTO cluster_results (
+            DECL_ID, HEADING, TOPIC, GROUP_MEAN_CIFVALTHB, ALERT_THRESHOLD_CIFVALTHB,
+            GROUP_MEAN_PRICE_PER_KG, ALERT_THRESHOLD_PRICE_PER_KG, ALERT_METRIC, ALERT_ANOMALY
+        )
         SELECT dt.DECL_ID, ? AS HEADING, dt.TOPIC,
                ga.MEAN_PRICE AS GROUP_MEAN_CIFVALTHB,
                ga.THRESHOLD AS ALERT_THRESHOLD_CIFVALTHB,
-               COALESCE(dt.CIFVALTHB < ga.THRESHOLD, FALSE) AS ALERT_ANOMALY
+               gk.MEAN_PRICE_PER_KG AS GROUP_MEAN_PRICE_PER_KG,
+               gk.THRESHOLD_PER_KG AS ALERT_THRESHOLD_PRICE_PER_KG,
+               CASE WHEN dt.WGT_KG IS NOT NULL AND dt.WGT_KG > 0 AND gk.THRESHOLD_PER_KG IS NOT NULL
+                    THEN 'price_per_kg' ELSE 'total_value' END AS ALERT_METRIC,
+               CASE WHEN dt.WGT_KG IS NOT NULL AND dt.WGT_KG > 0 AND gk.THRESHOLD_PER_KG IS NOT NULL
+                    THEN COALESCE((dt.CIFVALTHB / dt.WGT_KG) < gk.THRESHOLD_PER_KG, FALSE)
+                    ELSE COALESCE(dt.CIFVALTHB < ga.THRESHOLD, FALSE)
+               END AS ALERT_ANOMALY
         FROM _decl_topic dt
         LEFT JOIN _group_agg ga ON dt.TOPIC = ga.TOPIC
+        LEFT JOIN _group_agg_kg gk ON dt.TOPIC = gk.TOPIC
     """, [heading])
     con.unregister("_group_agg")
+    con.unregister("_group_agg_kg")
 
     sample_items = con.execute("""
         SELECT TOPIC, GDSDSC FROM (
@@ -382,9 +494,12 @@ def persist_heading_result(
     for topic_id, group in sample_items.groupby("TOPIC"):
         samples_by_topic[int(topic_id)] = group["GDSDSC"].tolist()
 
+    kg_by_topic = {int(r["TOPIC"]): r for _, r in group_agg_kg.iterrows()}
+
     group_stats = {}
     for _, row in group_agg.iterrows():
         topic_id = int(row["TOPIC"])
+        kg_row = kg_by_topic.get(topic_id)
         group_stats[str(topic_id)] = {
             "mean_price": float(row["MEAN_PRICE"]),
             "std_price": float(row["STD_PRICE"]) if pd.notna(row["STD_PRICE"]) else 0.0,
@@ -392,6 +507,10 @@ def persist_heading_result(
             "log_q1": float(row["LOG_Q1"]),
             "log_q3": float(row["LOG_Q3"]),
             "count": int(row["N"]),
+            "mean_price_per_kg": float(kg_row["MEAN_PRICE_PER_KG"]) if kg_row is not None else None,
+            "log_q1_per_kg": float(kg_row["LOG_Q1_KG"]) if kg_row is not None else None,
+            "log_q3_per_kg": float(kg_row["LOG_Q3_KG"]) if kg_row is not None else None,
+            "n_with_weight": int(kg_row["N_WITH_WEIGHT"]) if kg_row is not None else 0,
             "sample_items": samples_by_topic.get(topic_id, []),
         }
 
@@ -444,8 +563,9 @@ def count_alerts(con: duckdb.DuckDBPyConnection, heading: str) -> int:
 
 def query_alerts_page(con: duckdb.DuckDBPyConnection, heading: str, limit: int = 50, offset: int = 0) -> pd.DataFrame:
     return con.execute("""
-        SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC,
-               r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB
+        SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.CTYOGN, d.WGT, d.WGTUNT, d.WGT_KG, d.QTY, d.QTYUNT,
+               r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
+               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC
         FROM cluster_results r
         JOIN declarations d ON r.DECL_ID = d.DECL_ID
         WHERE r.HEADING = ? AND r.ALERT_ANOMALY
@@ -457,8 +577,9 @@ def query_alerts_page(con: duckdb.DuckDBPyConnection, heading: str, limit: int =
 def export_alerts_csv(con: duckdb.DuckDBPyConnection, heading: str, out_path: str) -> int:
     con.execute("""
         COPY (
-            SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC,
-                   r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB
+            SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.CTYOGN, d.WGT, d.WGTUNT, d.WGT_KG, d.QTY, d.QTYUNT,
+                   r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
+                   r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC
             FROM cluster_results r
             JOIN declarations d ON r.DECL_ID = d.DECL_ID
             WHERE r.HEADING = $heading AND r.ALERT_ANOMALY
@@ -479,8 +600,9 @@ def query_topic_items_page(
 ) -> pd.DataFrame:
     """ดึงทุกแถว (ไม่กรองแค่ alert) ของ topic นี้ภายใน heading — ใช้ดูว่ากลุ่มนี้จับสินค้าอะไรมารวมกันบ้าง"""
     return con.execute("""
-        SELECT d.DECL_ID, d.TRFCLS, d.GDSDSCTH, d.GDSDSC,
-               d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB, r.ALERT_ANOMALY
+        SELECT d.DECL_ID, d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.CTYOGN, d.WGT, d.WGTUNT, d.WGT_KG, d.QTY, d.QTYUNT,
+               d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
+               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC, r.ALERT_ANOMALY
         FROM cluster_results r
         JOIN declarations d ON r.DECL_ID = d.DECL_ID
         WHERE r.HEADING = ? AND r.TOPIC = ?
@@ -492,8 +614,9 @@ def query_topic_items_page(
 def export_topic_items_csv(con: duckdb.DuckDBPyConnection, heading: str, topic: int, out_path: str) -> int:
     con.execute("""
         COPY (
-            SELECT d.DECL_ID, d.TRFCLS, d.GDSDSCTH, d.GDSDSC,
-                   d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB, r.ALERT_ANOMALY
+            SELECT d.DECL_ID, d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.CTYOGN, d.WGT, d.WGTUNT, d.WGT_KG, d.QTY, d.QTYUNT,
+                   d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
+                   r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC, r.ALERT_ANOMALY
             FROM cluster_results r
             JOIN declarations d ON r.DECL_ID = d.DECL_ID
             WHERE r.HEADING = $heading AND r.TOPIC = $topic

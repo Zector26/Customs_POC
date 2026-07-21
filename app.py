@@ -185,6 +185,20 @@ with tab_test:
                 else:
                     test_alert_ratio = st.slider("Alert เมื่อราคาต่ำกว่า X% ของค่าเฉลี่ยกลุ่ม", 10, 90, 50, 5) / 100
 
+        check_weight = st.checkbox(
+            "ระบุน้ำหนัก (WGT) เพื่อใช้ราคาต่อกิโลกรัมเทียบ (แม่นกว่ามูลค่ารวมเฉยๆ เพราะตัดผลจากปริมาณที่สั่งออกไป)",
+        )
+        in_wgt_kg = None
+        if check_weight:
+            col5, col6 = st.columns(2)
+            with col5:
+                in_wgt = st.number_input("WGT (น้ำหนัก)", min_value=0.0, value=1.0, step=0.1)
+            with col6:
+                in_wgtunt = st.selectbox("WGTUNT (หน่วยน้ำหนัก)", db.list_known_weight_units(con))
+            in_wgt_kg = db.convert_weight_to_kg(con, in_wgt, in_wgtunt)
+            if in_wgt_kg is None:
+                st.warning(f"ไม่รู้จักหน่วย `{in_wgtunt}` — จะ fallback ไปเทียบมูลค่ารวม (CIFVALTHB) แทน")
+
         if st.button("🔍 ทำนายกลุ่ม + ตรวจสอบราคา", type="primary", width="stretch"):
             if not in_trfcls.strip() or not (in_gdsdsc.strip() or in_gdsdscth.strip()):
                 st.warning("กรุณากรอก TRFCLS และคำอธิบายสินค้าอย่างน้อยภาษาใดภาษาหนึ่ง")
@@ -204,7 +218,7 @@ with tab_test:
                 prediction = predict_new_item(
                     model_obj, group_stats, embedder,
                     gdsdsc=in_gdsdsc, gdsdscth=in_gdsdscth,
-                    cifvalthb=in_cifvalthb, alert_below_ratio=test_alert_ratio,
+                    cifvalthb=in_cifvalthb, wgt_kg=in_wgt_kg, alert_below_ratio=test_alert_ratio,
                     method=test_method, iqr_k=test_iqr_k, pca=pca,
                 )
 
@@ -224,21 +238,33 @@ with tab_test:
                     m2.metric("จำนวนตัวอย่างในกลุ่มตอนเทรน", stats["count"])
                     if in_cifvalthb is not None:
                         m3.metric("มูลค่าที่กรอก (บาท)", f"{in_cifvalthb:.2f}")
+                    if stats.get("mean_price_per_kg") is not None:
+                        st.caption(
+                            f"ราคาต่อกิโลเฉลี่ยของกลุ่ม (ตอนเทรน): {stats['mean_price_per_kg']:.2f} บาท/กก. "
+                            f"(จาก {stats['n_with_weight']} รายการที่มีข้อมูลน้ำหนัก)"
+                        )
 
                     if in_cifvalthb is not None:
                         method_note = (
                             f"IQR k={test_iqr_k:.1f}" if test_method == "iqr"
                             else f"{test_alert_ratio:.0%} ของค่าเฉลี่ยกลุ่ม"
                         )
+                        if prediction.get("alert_metric") == "price_per_kg":
+                            metric_value = in_cifvalthb / in_wgt_kg
+                            metric_label, threshold_label = f"{metric_value:.2f} บาท/กก.", f"{prediction['threshold']:.2f} บาท/กก."
+                            st.caption("อิงจากราคาต่อกิโล (บาท/กก.) เพราะมีข้อมูลน้ำหนักที่ใช้ได้ — แม่นกว่าเทียบมูลค่ารวมเฉยๆ")
+                        else:
+                            metric_label, threshold_label = f"{in_cifvalthb:.2f} บาท", f"{prediction['threshold']:.2f} บาท"
+                            st.caption("อิงจากมูลค่ารวม (บาท) เพราะไม่มีข้อมูลน้ำหนักที่ใช้ได้ (หรือกลุ่มนี้ไม่มีสถิติราคาต่อกิโลตอนเทรน)")
                         if prediction["alert"]:
                             st.error(
-                                f"🚨 ALERT: มูลค่าที่กรอก ({in_cifvalthb:.2f} บาท) ต่ำกว่า threshold "
-                                f"({prediction['threshold']:.2f} บาท, {method_note}) — สงสัยว่าสำแดงมูลค่าต่ำผิดปกติ"
+                                f"🚨 ALERT: ค่าที่คำนวณ ({metric_label}) ต่ำกว่า threshold "
+                                f"({threshold_label}, {method_note}) — สงสัยว่าสำแดงมูลค่าต่ำผิดปกติ"
                             )
                         else:
                             st.info(
-                                f"✅ มูลค่าที่กรอก ({in_cifvalthb:.2f} บาท) อยู่ในช่วงปกติ "
-                                f"(threshold แจ้งเตือนคือต่ำกว่า {prediction['threshold']:.2f} บาท, {method_note})"
+                                f"✅ ค่าที่คำนวณ ({metric_label}) อยู่ในช่วงปกติ "
+                                f"(threshold แจ้งเตือนคือต่ำกว่า {threshold_label}, {method_note})"
                             )
 
                 if viz_df is not None and prediction["coords_2d"] is not None:
