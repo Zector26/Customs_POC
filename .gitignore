@@ -9,3 +9,4 @@ seed_data/*.csv
 seed_data/*.xlsx
 !seed_data/.gitkeep
 .pytest_cache/
+*.tar.gz
