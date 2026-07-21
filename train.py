@@ -51,7 +51,7 @@ def train_heading(con, heading: str, embedder, args, params: dict) -> dict:
 
     fit_hashes, fit_texts, fit_embeddings = all_hashes, all_texts, all_embeddings
     sampled = False
-    if n_unique_total > args.sample_cap:
+    if args.sample_cap and n_unique_total > args.sample_cap:
         sampled = True
         log(
             f"heading={heading}: n_unique={n_unique_total:,} เกิน --sample-cap={args.sample_cap:,} -> "
@@ -71,6 +71,7 @@ def train_heading(con, heading: str, embedder, args, params: dict) -> dict:
         nr_topics = int(args.nr_topics)
     labels, fitted_model = run_bertopic(
         fit_texts, fit_embeddings, embedder, nr_topics=nr_topics, min_topic_size=args.min_topic_size,
+        min_samples=args.min_samples,
     )
     hash_to_topic = pd.DataFrame({"TEXT_HASH": fit_hashes, "TOPIC": labels})
 
@@ -102,8 +103,15 @@ def main():
     )
     parser.add_argument("--min-topic-size", type=int, default=5)
     parser.add_argument(
+        "--min-samples", type=int, default=None,
+        help="ความเข้มงวดของ HDBSCAN ตอนตัดสิน noise (-1) แยกจาก --min-topic-size — ค่า default ถ้าไม่ตั้ง "
+             "คือเท่ากับ --min-topic-size (ค่า default ของ HDBSCAN เอง เข้มงวดมาก) ตั้งให้ต่ำกว่า "
+             "--min-topic-size เพื่อลดสัดส่วน noise โดยไม่ต้องลด --min-topic-size",
+    )
+    parser.add_argument(
         "--sample-cap", type=int, default=DEFAULT_SAMPLE_CAP,
-        help="เพดานจำนวนข้อความไม่ซ้ำต่อ heading ที่ให้ BERTopic fit จริง (สุ่มตัวอย่างถ้าเกิน)",
+        help="เพดานจำนวนข้อความไม่ซ้ำต่อ heading ที่ให้ BERTopic fit จริง (สุ่มตัวอย่างถ้าเกิน) — ตั้งเป็น 0 "
+             "เพื่อปิด (fit ข้อความไม่ซ้ำทั้งหมดเสมอ ไม่สุ่มตัด ระวังเวลา/memory ถ้า heading มีข้อความไม่ซ้ำมาก)",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--embedding-batch-size", type=int, default=256)
@@ -138,7 +146,7 @@ def main():
     params = {
         "anomaly_method": args.anomaly_method, "alert_below_ratio": args.alert_below_ratio,
         "iqr_k": args.iqr_k, "seed": args.seed, "nr_topics": args.nr_topics,
-        "min_topic_size": args.min_topic_size, "sample_cap": args.sample_cap,
+        "min_topic_size": args.min_topic_size, "min_samples": args.min_samples, "sample_cap": args.sample_cap,
     }
 
     total_flagged = 0

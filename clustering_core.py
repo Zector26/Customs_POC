@@ -12,6 +12,7 @@ from sklearn.decomposition import PCA
 import joblib
 from sentence_transformers import SentenceTransformer
 from bertopic import BERTopic
+from hdbscan import HDBSCAN
 
 # multilingual-e5-small (~118M params, ~470MB) — เร็วพอสำหรับรันบน CPU ที่ไม่มี GPU
 EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-small"
@@ -22,7 +23,7 @@ HEADING_DIGITS = 8  # TRFCLS 8 หลักแรก (AHTN) — fix ตายต
 
 # ถ้าจำนวนข้อความไม่ซ้ำภายใน heading เกินค่านี้ จะสุ่มตัวอย่างมา fit BERTopic แทน (BERTopic ไม่ scale
 # เชิงพีชคณิตกับจำนวนเอกสาร — แต่การแบ่งตาม heading ก่อนแล้วช่วยลดจำนวนต่อรอบลงมากแล้วในตัว)
-DEFAULT_SAMPLE_CAP = 20_000
+DEFAULT_SAMPLE_CAP = 100_000
 # heading ที่มีข้อความไม่ซ้ำน้อยกว่านี้ ข้ามการรัน BERTopic (ข้อมูลน้อยเกินจะ fit ไม่ได้ความหมาย) —
 # ให้ทุกแถวใน heading นั้นเป็น topic เดียว (topic=0) แทน
 MIN_UNIQUE_DOCS_FOR_BERTOPIC = 5
@@ -55,12 +56,28 @@ def compute_embeddings(embedder: SentenceTransformer, texts: list[str], batch_si
     return np.vstack(chunks)
 
 
-def run_bertopic(texts, embeddings, embedder, nr_topics: int | str | None = None, min_topic_size: int = 5):
+def run_bertopic(
+    texts, embeddings, embedder, nr_topics: int | str | None = None, min_topic_size: int = 5,
+    min_samples: int | None = None,
+):
     """nr_topics=None (ค่าเริ่มต้นของ BERTopic เอง) คือปล่อยให้ HDBSCAN ภายในหาจำนวน topic เองไม่ต้อง
     ลด/รวม topic ทีหลัง — ปลอดภัยกว่า nr_topics="auto" มากสำหรับ heading ที่มีข้อมูลน้อย เพราะ "auto"
-    เรียก _auto_reduce_topics ซึ่ง crash ถ้าทุกเอกสารถูกจัดเป็น noise (-1) หมด (ไม่มีเอกสารให้ reduce)"""
+    เรียก _auto_reduce_topics ซึ่ง crash ถ้าทุกเอกสารถูกจัดเป็น noise (-1) หมด (ไม่มีเอกสารให้ reduce)
+
+    min_samples: ควบคุมความเข้มงวดของ HDBSCAN ตอนตัดสินว่าจุดหนึ่งเป็น noise (-1) หรือไม่ แยกจาก
+    min_topic_size (=min_cluster_size คุมว่ากลุ่มต้องใหญ่แค่ไหนถึงนับเป็น topic) ค่า default ของ BERTopic
+    เอง (ถ้าไม่ตั้งเอง) คือ min_samples=min_cluster_size ซึ่งเข้มงวดมาก ทำให้สัดส่วน noise สูงเมื่อ
+    min_topic_size ถูกปรับขึ้น — ตั้งค่านี้ให้ต่ำกว่า min_topic_size เพื่อลด noise โดยไม่ต้องลด min_topic_size"""
+    hdbscan_model = HDBSCAN(
+        min_cluster_size=min_topic_size,
+        min_samples=min_samples,
+        metric="euclidean",
+        cluster_selection_method="eom",
+        prediction_data=True,
+    )
     topic_model = BERTopic(
         embedding_model=embedder,
+        hdbscan_model=hdbscan_model,
         nr_topics=nr_topics,
         min_topic_size=min_topic_size,
         calculate_probabilities=False,
