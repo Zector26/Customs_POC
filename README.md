@@ -141,6 +141,36 @@ docker compose exec app python train.py
 กว่า `start-period` ที่ตั้งไว้ใน [Dockerfile](Dockerfile) (ค่าเริ่มต้น 600 วินาที) ทำให้ container ดู
 "unhealthy" ชั่วคราวทั้งที่กำลังเทรนอยู่จริง — ปรับ `start-period` เพิ่มได้ตามขนาดข้อมูลจริง
 
+### เครื่องออกเน็ตไม่ได้เลย (ไม่มี proxy ให้ใช้)
+
+`train.py`/`startup.py` ต้องโหลดโมเดล embedding (`intfloat/multilingual-e5-small`, ~470MB) จาก
+HuggingFace Hub ครั้งแรกที่ยังไม่มีอยู่ใน cache (`customs-hf-cache` volume) ถ้าเครื่องที่รันจริงไม่มีทาง
+ออกเน็ตเลย ให้โหลดโมเดลมาจากเครื่องอื่นที่มีเน็ตล่วงหน้า แล้ว copy เข้า volume ก่อน:
+
+**1) บนเครื่องที่มีเน็ต** — โหลดโมเดลแล้วแพ็ค cache folder:
+```bash
+pip install sentence-transformers
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-small')"
+tar czf hf_cache.tar.gz -C ~/.cache/huggingface .    # Windows: -C %USERPROFILE%\.cache\huggingface
+```
+
+**2) ย้าย `hf_cache.tar.gz` ไปเครื่องที่จะ deploy จริง** (USB/scp/ฯลฯ) แล้วโหลดเข้า Docker volume
+(ชื่อ volume คงที่เสมอเพราะตั้ง `name: customs-poc` ไว้ใน `docker-compose.yml` แล้ว ไม่ผันตามชื่อโฟลเดอร์
+ที่ clone มา):
+```bash
+docker volume create customs-poc_customs-hf-cache
+docker run --rm -v customs-poc_customs-hf-cache:/data -v "$(pwd)":/backup alpine \
+  tar xzf /backup/hf_cache.tar.gz -C /data
+```
+
+**3) เปิด offline mode** ใน `docker-compose.yml` (uncomment 2 บรรทัดนี้ในหัวข้อ `environment:`):
+```yaml
+- HF_HUB_OFFLINE=1
+- TRANSFORMERS_OFFLINE=1
+```
+แล้ว `docker compose up --build -d` ตามปกติ — `train.py` จะใช้โมเดลจาก cache local ล้วนๆ ไม่พยายามต่อเน็ต
+ไปเช็ค HuggingFace เลยแม้แต่ครั้งเดียว (ทดสอบแล้วว่าใช้ได้แม้ตั้ง proxy เป็นค่าที่ต่อไม่ได้เลยก็ตาม)
+
 ## HDBSCAN/BERTopic กับ scale — ทำไมแบ่งตาม heading ก่อนถึงช่วยได้
 
 BERTopic (ผ่าน UMAP + HDBSCAN ภายใน) ไม่ scale เชิงพีชคณิตกับจำนวนเอกสาร ถ้าเอาข้อความทั้งฐานข้อมูล

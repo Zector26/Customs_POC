@@ -1,3 +1,6 @@
+name: customs-poc   # fix ชื่อ project ไว้ตรงๆ ไม่ให้ผันตามชื่อโฟลเดอร์ที่ clone มา (เช่น Customs_POC vs
+                    # customs_poc) — ทำให้ชื่อ volume คงที่เสมอ (customs-poc_customs-data ฯลฯ) เดา/อ้างอิงได้
+
 services:
   app:
     build: .
@@ -14,6 +17,11 @@ services:
       # - DATA_SHEET=Sheet1                          # ถ้าไฟล์เป็น .xlsx และไม่ใช่ sheet แรก
       # - FORCE_RETRAIN=1                            # บังคับ ingest+เทรนใหม่ทุกครั้งที่ container start
       # - TRAIN_ARGS=--sample-cap 30000 --nr-topics 8 # พารามิเตอร์เพิ่มเติมส่งต่อให้ train.py
+      # ถ้าโหลดโมเดล embedding ลงใน volume customs-hf-cache ไว้ล่วงหน้าแล้ว (เครื่องออกเน็ตไม่ได้เลย)
+      # เปิด 2 ตัวนี้เพื่อไม่ให้ลองต่อเน็ตเช็ค HuggingFace อีกเลย ใช้ cache local อย่างเดียว (ดู README
+      # หัวข้อ "เครื่องออกเน็ตไม่ได้เลย")
+      # - HF_HUB_OFFLINE=1
+      # - TRANSFORMERS_OFFLINE=1
     restart: unless-stopped
 
 volumes:
