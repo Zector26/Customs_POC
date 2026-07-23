@@ -16,7 +16,6 @@ train.py เขียน (mount แบบ read-only ใน docker-compose.yml)
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 import db
@@ -25,32 +24,18 @@ from clustering_core import MODELS_DIR, heading_model_exists, load_embedder, loa
 TEST_XLSX_PATH = "webapp/fixtures/test_declarations.xlsx"
 TEST_DB_PATH = "data/test_run.duckdb"
 
-# ต้อง mirror ค่า default เดียวกับที่ train.py ใช้จริงตอนเทรน (ดู train.py --anomaly-method/--iqr-k/
-# --alert-below-ratio) ไม่งั้น threshold ที่ใช้ตัดสิน undervalue ตรงนี้จะไม่ตรงกับที่คำนวณไว้ตอนเทรน
-PREDICT_METHOD = "iqr"
-PREDICT_IQR_K = 1.5
+# ต้อง mirror ค่า default เดียวกับที่ train.py ใช้จริงตอนเทรน (ดู train.py --alert-ratio) ไม่งั้น threshold
+# ที่ใช้ตัดสิน undervalue/overvalue ตรงนี้จะไม่ตรงกับที่คำนวณไว้ตอนเทรน
 PREDICT_ALERT_RATIO = 0.5
 
 
-def _topic_label(model_obj, topic_id) -> str:
-    if model_obj is None:
-        return "กลุ่มเดียว (heading นี้ข้อมูลน้อยตอนเทรน)"
-    if topic_id == -1:
-        return "ไม่เข้ากลุ่มใด (noise)"
-    words = [w for w, _ in model_obj.get_topic(topic_id)][:5]
-    return ", ".join(words) if words else f"topic {topic_id}"
-
-
-def _threshold(mean, log_q1, log_q3) -> float | None:
-    """คำนวณ threshold ด้วยสูตรเดียวกับ clustering_core.predict_new_item/db.persist_heading_result —
-    แยกมาคำนวณเองตรงนี้เพื่อโชว์ทั้ง 2 metric (มูลค่ารวม + ราคาต่อกิโล) พร้อมกันในหน้ารายละเอียด ไม่ใช่แค่
-    metric เดียวที่ predict_new_item เลือกใช้จริง"""
-    if mean is None or log_q1 is None or log_q3 is None:
-        return None
-    if PREDICT_METHOD == "ratio":
-        return mean * PREDICT_ALERT_RATIO
-    lower_log = log_q1 - PREDICT_IQR_K * (log_q3 - log_q1)
-    return float(np.exp(lower_log))
+def _thresholds(mean: float | None) -> tuple[float | None, float | None]:
+    """คำนวณ threshold ต่ำ/สูงด้วยสูตรเดียวกับ clustering_core.predict_new_item/db.persist_heading_result
+    (mean * (1 ± PREDICT_ALERT_RATIO)) — แยกมาคำนวณเองตรงนี้เพื่อโชว์ทั้ง 2 metric (มูลค่ารวม + ราคาต่อกิโล)
+    พร้อมกันในหน้ารายละเอียด ไม่ใช่แค่ metric เดียวที่ predict_new_item เลือกใช้จริง"""
+    if mean is None:
+        return None, None
+    return mean * (1 - PREDICT_ALERT_RATIO), mean * (1 + PREDICT_ALERT_RATIO)
 
 
 def run(xlsx_path: str = TEST_XLSX_PATH, db_path: str = TEST_DB_PATH, embedder=None,
@@ -93,37 +78,41 @@ def run(xlsx_path: str = TEST_XLSX_PATH, db_path: str = TEST_DB_PATH, embedder=N
         wgt_kg = float(wgt_kg_raw) if pd.notna(wgt_kg_raw) else None
 
         if cached is None:
-            row.update(TOPIC=None, TOPIC_LABEL="ไม่มีข้อมูลอ้างอิง (heading นี้ยังไม่เคยเทรน)",
-                       ALERT_ANOMALY=None, ALERT_METRIC=None, GROUP_MEAN_CIFVALTHB=None,
-                       ALERT_THRESHOLD_CIFVALTHB=None, GROUP_MEAN_PRICE_PER_KG=None, ALERT_THRESHOLD_PRICE_PER_KG=None)
+            row.update(TOPIC=None,
+                       ALERT_STATUS=None, ALERT_METRIC=None, GROUP_MEAN_CIFVALTHB=None,
+                       ALERT_THRESHOLD_LOW_CIFVALTHB=None, ALERT_THRESHOLD_HIGH_CIFVALTHB=None,
+                       GROUP_MEAN_PRICE_PER_KG=None, ALERT_THRESHOLD_LOW_PRICE_PER_KG=None,
+                       ALERT_THRESHOLD_HIGH_PRICE_PER_KG=None)
             n_no_reference += 1
         else:
             model_obj, group_stats = cached
             headings_matched.add(heading)
             pred = predict_new_item(
                 model_obj, group_stats, embedder, gdsdsc=d.get("GDSDSC") or "", gdsdscth=d.get("GDSDSCTH") or "",
-                cifvalthb=float(d["CIFVALTHB"]), wgt_kg=wgt_kg, alert_below_ratio=PREDICT_ALERT_RATIO,
-                method=PREDICT_METHOD, iqr_k=PREDICT_IQR_K,
+                cifvalthb=float(d["CIFVALTHB"]), wgt_kg=wgt_kg, alert_ratio=PREDICT_ALERT_RATIO,
             )
             stats = pred.get("group_stats")
             if stats is None:
-                row.update(TOPIC=pred["topic"], TOPIC_LABEL=_topic_label(model_obj, pred["topic"]),
-                           ALERT_ANOMALY=None, ALERT_METRIC=None, GROUP_MEAN_CIFVALTHB=None,
-                           ALERT_THRESHOLD_CIFVALTHB=None, GROUP_MEAN_PRICE_PER_KG=None, ALERT_THRESHOLD_PRICE_PER_KG=None)
+                row.update(TOPIC=pred["topic"],
+                           ALERT_STATUS=None, ALERT_METRIC=None, GROUP_MEAN_CIFVALTHB=None,
+                           ALERT_THRESHOLD_LOW_CIFVALTHB=None, ALERT_THRESHOLD_HIGH_CIFVALTHB=None,
+                           GROUP_MEAN_PRICE_PER_KG=None, ALERT_THRESHOLD_LOW_PRICE_PER_KG=None,
+                           ALERT_THRESHOLD_HIGH_PRICE_PER_KG=None)
                 n_no_reference += 1
             else:
-                alert = bool(pred["alert"])
-                if alert:
+                status = pred["status"]
+                if status != "normal":
                     n_flagged += 1
+                threshold_low, threshold_high = _thresholds(stats["mean_price"])
+                threshold_low_kg, threshold_high_kg = _thresholds(stats.get("mean_price_per_kg"))
                 row.update(
-                    TOPIC=pred["topic"], TOPIC_LABEL=_topic_label(model_obj, pred["topic"]),
-                    ALERT_ANOMALY=alert, ALERT_METRIC=pred.get("alert_metric"),
+                    TOPIC=pred["topic"],
+                    ALERT_STATUS=status, ALERT_METRIC=pred.get("alert_metric"),
                     GROUP_MEAN_CIFVALTHB=stats["mean_price"],
-                    ALERT_THRESHOLD_CIFVALTHB=_threshold(stats["mean_price"], stats["log_q1"], stats["log_q3"]),
+                    ALERT_THRESHOLD_LOW_CIFVALTHB=threshold_low, ALERT_THRESHOLD_HIGH_CIFVALTHB=threshold_high,
                     GROUP_MEAN_PRICE_PER_KG=stats.get("mean_price_per_kg"),
-                    ALERT_THRESHOLD_PRICE_PER_KG=_threshold(
-                        stats.get("mean_price_per_kg"), stats.get("log_q1_per_kg"), stats.get("log_q3_per_kg")
-                    ),
+                    ALERT_THRESHOLD_LOW_PRICE_PER_KG=threshold_low_kg,
+                    ALERT_THRESHOLD_HIGH_PRICE_PER_KG=threshold_high_kg,
                 )
         rows.append(row)
 

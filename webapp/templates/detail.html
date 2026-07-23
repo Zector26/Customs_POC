@@ -2,7 +2,7 @@
   <button class="dclose" onclick="closeDrawer()">✕</button>
   <div class="dh-top">
     <span class="status big {{ r.status }}">
-      {% if r.status == 'red' %}Undervalue{% elif r.status == 'green' %}Not Undervalue{% else %}Unknown{% endif %}
+      {% if r.status == 'red' %}Undervalue{% elif r.status == 'orange' %}Overvalue{% elif r.status == 'green' %}Normal{% else %}Unknown{% endif %}
     </span>
     <span class="kind import">ใบขนสินค้าขาเข้า</span>
   </div>
@@ -20,7 +20,6 @@
     <div><label>พิกัด (TRFCLS 8 หลักแรก)</label><span class="mono">{{ r.heading }}</span></div>
     <div><label>Topic</label><span class="mono">{{ r.topic }}</span></div>
   </div>
-  <div class="topiclabel">คำสำคัญของกลุ่ม: {{ r.topic_label }}</div>
 </div>
 
 <div class="card">
@@ -29,18 +28,20 @@
     <div><label>มูลค่า CIF ของรายการนี้ (บาท)</label><span class="mono">{{ r.cif }}</span></div>
     {% if r.group_mean %}
     <div><label>ค่าเฉลี่ยของกลุ่ม (บาท) — จากขา train</label><span class="mono">{{ r.group_mean }}</span></div>
-    <div><label>Threshold แจ้งเตือน (บาท)</label><span class="mono">{{ r.threshold }}</span></div>
+    <div><label>Threshold ต่ำ/สูง แจ้งเตือน (บาท)</label><span class="mono">{{ r.threshold_low }} / {{ r.threshold_high }}</span></div>
     {% endif %}
     {% if r.group_mean_kg %}
     <div><label>ราคาเฉลี่ยต่อกิโลของกลุ่ม (บาท/กก.)</label><span class="mono">{{ r.group_mean_kg }}</span></div>
-    <div><label>Threshold ต่อกิโล (บาท/กก.)</label><span class="mono">{{ r.threshold_kg }}</span></div>
+    <div><label>Threshold ต่ำ/สูง ต่อกิโล (บาท/กก.)</label><span class="mono">{{ r.threshold_low_kg }} / {{ r.threshold_high_kg }}</span></div>
     {% endif %}
     {% if r.group_mean %}
     <div><label>ตัวชี้วัดที่ใช้เทียบ</label><span>{{ 'ราคาต่อกิโลกรัม' if r.alert_metric == 'price_per_kg' else 'มูลค่ารวม (CIF)' }}</span></div>
     {% endif %}
   </div>
   {% if r.status == 'red' %}
-  <div class="guard block">🚩 มูลค่าที่สำแดงต่ำกว่า threshold ของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาต่ำผิดปกติ (Undervalue)</div>
+  <div class="guard block">🚩 มูลค่าที่สำแดงต่ำกว่า threshold ต่ำของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาต่ำผิดปกติ (Undervalue)</div>
+  {% elif r.status == 'orange' %}
+  <div class="guard warn">🔶 มูลค่าที่สำแดงสูงกว่า threshold สูงของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาสูงผิดปกติ (Overvalue)</div>
   {% elif r.status == 'green' %}
   <div class="guard ok">✓ มูลค่าที่สำแดงอยู่ในช่วงปกติเมื่อเทียบกับกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้)</div>
   {% else %}

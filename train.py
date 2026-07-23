@@ -41,8 +41,7 @@ def train_heading(con, heading: str, embedder, args, params: dict, models_dir=cl
         log(f"heading={heading}: {reason}")
         hash_to_topic = pd.DataFrame({"TEXT_HASH": all_hashes, "TOPIC": [0] * n_unique_total})
         result = db.persist_heading_result(
-            con, heading, hash_to_topic, method=args.anomaly_method, iqr_k=args.iqr_k,
-            alert_below_ratio=args.alert_below_ratio, exclude_noise=False,
+            con, heading, hash_to_topic, alert_ratio=args.alert_ratio, exclude_noise=False,
             sampled=False, n_unique_total=n_unique_total, skipped_reason=reason,
         )
         # model_obj=None หมายถึง heading นี้ไม่มีโมเดล BERTopic จริง — predict_new_item จะให้ทุกแถว
@@ -83,8 +82,7 @@ def train_heading(con, heading: str, embedder, args, params: dict, models_dir=cl
     viz_df = viz_full.sample(min(args.viz_sample_size, len(viz_full)), random_state=args.seed).reset_index(drop=True)
 
     result = db.persist_heading_result(
-        con, heading, hash_to_topic, method=args.anomaly_method, iqr_k=args.iqr_k,
-        alert_below_ratio=args.alert_below_ratio, exclude_noise=False,
+        con, heading, hash_to_topic, alert_ratio=args.alert_ratio, exclude_noise=False,
         sampled=sampled, n_unique_total=n_unique_total, skipped_reason=None,
     )
     save_heading_model(heading, fitted_model, result["group_stats"], params, pca=pca, viz_df=viz_df, models_dir=models_dir)
@@ -94,9 +92,11 @@ def train_heading(con, heading: str, embedder, args, params: dict, models_dir=cl
 def main():
     parser = argparse.ArgumentParser(description="เทรน BERTopic แยกต่อ heading (TRFCLS 8 หลักแรก)")
     parser.add_argument("--db-path", default=db.DB_PATH)
-    parser.add_argument("--anomaly-method", default="iqr", choices=["iqr", "ratio"])
-    parser.add_argument("--iqr-k", type=float, default=1.5)
-    parser.add_argument("--alert-below-ratio", type=float, default=0.5)
+    parser.add_argument(
+        "--alert-ratio", type=float, default=0.5,
+        help="สัดส่วน ± จากค่าเฉลี่ยของกลุ่มที่ใช้ตัดสิน undervalue/overvalue เช่น 0.5 (ค่าเริ่มต้น) = "
+             "ต่ำกว่าค่าเฉลี่ย 50% ขึ้นไปเป็น undervalue, สูงกว่าค่าเฉลี่ย 50% ขึ้นไปเป็น overvalue",
+    )
     parser.add_argument(
         "--nr-topics", default=None,
         help='จำนวนกลุ่มสูงสุดของ BERTopic ต่อ heading, "auto", หรือเว้นว่างไว้ (ค่าเริ่มต้น แนะนำ — ไม่ทำ '
@@ -145,8 +145,7 @@ def main():
         db.insert_embeddings(con, missing["TEXT_HASH"].tolist(), missing["TEXT_FOR_EMBEDDING"].tolist(), embeddings)
 
     params = {
-        "anomaly_method": args.anomaly_method, "alert_below_ratio": args.alert_below_ratio,
-        "iqr_k": args.iqr_k, "seed": args.seed, "nr_topics": args.nr_topics,
+        "alert_ratio": args.alert_ratio, "seed": args.seed, "nr_topics": args.nr_topics,
         "min_topic_size": args.min_topic_size, "min_samples": args.min_samples, "sample_cap": args.sample_cap,
     }
 

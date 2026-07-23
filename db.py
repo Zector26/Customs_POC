@@ -120,14 +120,23 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             HEADING VARCHAR,
             TOPIC INTEGER,
             GROUP_MEAN_CIFVALTHB DOUBLE,
-            ALERT_THRESHOLD_CIFVALTHB DOUBLE,
-            ALERT_ANOMALY BOOLEAN
+            ALERT_THRESHOLD_LOW_CIFVALTHB DOUBLE,
+            ALERT_THRESHOLD_HIGH_CIFVALTHB DOUBLE,
+            ALERT_STATUS VARCHAR
         )
     """)
     for col_def in [
-        "GROUP_MEAN_PRICE_PER_KG DOUBLE", "ALERT_THRESHOLD_PRICE_PER_KG DOUBLE", "ALERT_METRIC VARCHAR",
+        "ALERT_THRESHOLD_LOW_CIFVALTHB DOUBLE", "ALERT_THRESHOLD_HIGH_CIFVALTHB DOUBLE", "ALERT_STATUS VARCHAR",
+        "GROUP_MEAN_PRICE_PER_KG DOUBLE", "ALERT_THRESHOLD_LOW_PRICE_PER_KG DOUBLE",
+        "ALERT_THRESHOLD_HIGH_PRICE_PER_KG DOUBLE", "ALERT_METRIC VARCHAR",
     ]:
         con.execute(f"ALTER TABLE cluster_results ADD COLUMN IF NOT EXISTS {col_def}")
+    # คอลัมน์รุ่นเก่า (undervalue-only, IQR-based) — ลบทิ้งถ้ามี migrate มาจาก DB ไฟล์เก่า (idempotent)
+    # ต้อง DROP index ก่อน ไม่งั้น DuckDB ปฏิเสธ ALTER ... DROP COLUMN ด้วย DependencyException (มี index
+    # ผูกอยู่กับตาราง ไม่ใช่แค่คอลัมน์ที่จะลบ) แล้วค่อยสร้าง index กลับตอนท้าย
+    con.execute("DROP INDEX IF EXISTS idx_cluster_results_heading")
+    for old_col in ["ALERT_THRESHOLD_CIFVALTHB", "ALERT_THRESHOLD_PRICE_PER_KG", "ALERT_ANOMALY"]:
+        con.execute(f"ALTER TABLE cluster_results DROP COLUMN IF EXISTS {old_col}")
     con.execute("CREATE INDEX IF NOT EXISTS idx_cluster_results_heading ON cluster_results(HEADING)")
     con.execute("""
         CREATE TABLE IF NOT EXISTS topic_labels (
@@ -399,9 +408,7 @@ def persist_heading_result(
     con: duckdb.DuckDBPyConnection,
     heading: str,
     hash_to_topic: pd.DataFrame,  # columns: TEXT_HASH, TOPIC
-    method: str,
-    iqr_k: float,
-    alert_below_ratio: float,
+    alert_ratio: float,
     exclude_noise: bool,
     sampled: bool,
     n_unique_total: int,
@@ -409,7 +416,10 @@ def persist_heading_result(
 ) -> dict:
     """Broadcast topic label จาก TEXT_HASH กลับไปทุกแถวของ heading นี้ด้วย SQL join แล้วคำนวณ
     ค่าเฉลี่ยราคา/threshold ต่อกลุ่มแบบ SQL aggregation บันทึกผลลง cluster_results + heading_meta
-    แล้วคืน group_stats dict (เก็บไว้ใช้ตอน predict ข้อมูลใหม่)"""
+    แล้วคืน group_stats dict (เก็บไว้ใช้ตอน predict ข้อมูลใหม่)
+
+    threshold ต่ำ/สูงคำนวณจาก mean * (1 ± alert_ratio) เช่น alert_ratio=0.5 -> ต่ำกว่าเฉลี่ย 50% = undervalue,
+    สูงกว่าเฉลี่ย 50% = overvalue (แทนที่ Q1/Q3 แบบ IQR เดิม — ง่ายกว่าและสมมาตรทั้งสองทาง)"""
     con.execute("DELETE FROM cluster_results WHERE HEADING = ?", [heading])
 
     con.register("_hash_topic", hash_to_topic)
@@ -429,8 +439,6 @@ def persist_heading_result(
                avg(CIFVALTHB) AS MEAN_PRICE,
                stddev_samp(CIFVALTHB) AS STD_PRICE,
                median(CIFVALTHB) AS MEDIAN_PRICE,
-               quantile_cont(ln(CIFVALTHB), 0.25) AS LOG_Q1,
-               quantile_cont(ln(CIFVALTHB), 0.75) AS LOG_Q3,
                count(*) AS N
         FROM _decl_topic
         {noise_filter}
@@ -456,43 +464,43 @@ def persist_heading_result(
                avg(CIFVALTHB / WGT_KG) AS MEAN_PRICE_PER_KG,
                stddev_samp(CIFVALTHB / WGT_KG) AS STD_PRICE_PER_KG,
                median(CIFVALTHB / WGT_KG) AS MEDIAN_PRICE_PER_KG,
-               quantile_cont(ln(CIFVALTHB / WGT_KG), 0.25) AS LOG_Q1_KG,
-               quantile_cont(ln(CIFVALTHB / WGT_KG), 0.75) AS LOG_Q3_KG,
                count(*) AS N_WITH_WEIGHT
         FROM _decl_topic
         WHERE {' AND '.join(kg_conditions)}
         GROUP BY TOPIC
     """).df()
 
-    if method == "ratio":
-        group_agg["THRESHOLD"] = group_agg["MEAN_PRICE"] * alert_below_ratio
-        group_agg_kg["THRESHOLD_PER_KG"] = group_agg_kg["MEAN_PRICE_PER_KG"] * alert_below_ratio
-    elif method == "iqr":
-        lower_log = group_agg["LOG_Q1"] - iqr_k * (group_agg["LOG_Q3"] - group_agg["LOG_Q1"])
-        group_agg["THRESHOLD"] = np.exp(lower_log)
-        lower_log_kg = group_agg_kg["LOG_Q1_KG"] - iqr_k * (group_agg_kg["LOG_Q3_KG"] - group_agg_kg["LOG_Q1_KG"])
-        group_agg_kg["THRESHOLD_PER_KG"] = np.exp(lower_log_kg)
-    else:
-        raise ValueError(f"unknown method: {method}")
+    group_agg["THRESHOLD_LOW"] = group_agg["MEAN_PRICE"] * (1 - alert_ratio)
+    group_agg["THRESHOLD_HIGH"] = group_agg["MEAN_PRICE"] * (1 + alert_ratio)
+    group_agg_kg["THRESHOLD_LOW_KG"] = group_agg_kg["MEAN_PRICE_PER_KG"] * (1 - alert_ratio)
+    group_agg_kg["THRESHOLD_HIGH_KG"] = group_agg_kg["MEAN_PRICE_PER_KG"] * (1 + alert_ratio)
 
-    con.register("_group_agg", group_agg[["TOPIC", "MEAN_PRICE", "THRESHOLD"]])
-    con.register("_group_agg_kg", group_agg_kg[["TOPIC", "MEAN_PRICE_PER_KG", "THRESHOLD_PER_KG"]])
+    con.register("_group_agg", group_agg[["TOPIC", "MEAN_PRICE", "THRESHOLD_LOW", "THRESHOLD_HIGH"]])
+    con.register("_group_agg_kg", group_agg_kg[["TOPIC", "MEAN_PRICE_PER_KG", "THRESHOLD_LOW_KG", "THRESHOLD_HIGH_KG"]])
     con.execute("""
         INSERT INTO cluster_results (
-            DECL_ID, HEADING, TOPIC, GROUP_MEAN_CIFVALTHB, ALERT_THRESHOLD_CIFVALTHB,
-            GROUP_MEAN_PRICE_PER_KG, ALERT_THRESHOLD_PRICE_PER_KG, ALERT_METRIC, ALERT_ANOMALY
+            DECL_ID, HEADING, TOPIC, GROUP_MEAN_CIFVALTHB, ALERT_THRESHOLD_LOW_CIFVALTHB, ALERT_THRESHOLD_HIGH_CIFVALTHB,
+            GROUP_MEAN_PRICE_PER_KG, ALERT_THRESHOLD_LOW_PRICE_PER_KG, ALERT_THRESHOLD_HIGH_PRICE_PER_KG,
+            ALERT_METRIC, ALERT_STATUS
         )
         SELECT dt.DECL_ID, ? AS HEADING, dt.TOPIC,
                ga.MEAN_PRICE AS GROUP_MEAN_CIFVALTHB,
-               ga.THRESHOLD AS ALERT_THRESHOLD_CIFVALTHB,
+               ga.THRESHOLD_LOW AS ALERT_THRESHOLD_LOW_CIFVALTHB,
+               ga.THRESHOLD_HIGH AS ALERT_THRESHOLD_HIGH_CIFVALTHB,
                gk.MEAN_PRICE_PER_KG AS GROUP_MEAN_PRICE_PER_KG,
-               gk.THRESHOLD_PER_KG AS ALERT_THRESHOLD_PRICE_PER_KG,
-               CASE WHEN dt.WGT_KG IS NOT NULL AND dt.WGT_KG > 0 AND gk.THRESHOLD_PER_KG IS NOT NULL
+               gk.THRESHOLD_LOW_KG AS ALERT_THRESHOLD_LOW_PRICE_PER_KG,
+               gk.THRESHOLD_HIGH_KG AS ALERT_THRESHOLD_HIGH_PRICE_PER_KG,
+               CASE WHEN dt.WGT_KG IS NOT NULL AND dt.WGT_KG > 0 AND gk.THRESHOLD_LOW_KG IS NOT NULL
                     THEN 'price_per_kg' ELSE 'total_value' END AS ALERT_METRIC,
-               CASE WHEN dt.WGT_KG IS NOT NULL AND dt.WGT_KG > 0 AND gk.THRESHOLD_PER_KG IS NOT NULL
-                    THEN COALESCE((dt.CIFVALTHB / dt.WGT_KG) < gk.THRESHOLD_PER_KG, FALSE)
-                    ELSE COALESCE(dt.CIFVALTHB < ga.THRESHOLD, FALSE)
-               END AS ALERT_ANOMALY
+               CASE WHEN dt.WGT_KG IS NOT NULL AND dt.WGT_KG > 0 AND gk.THRESHOLD_LOW_KG IS NOT NULL THEN
+                        CASE WHEN COALESCE((dt.CIFVALTHB / dt.WGT_KG) < gk.THRESHOLD_LOW_KG, FALSE) THEN 'undervalue'
+                             WHEN COALESCE((dt.CIFVALTHB / dt.WGT_KG) > gk.THRESHOLD_HIGH_KG, FALSE) THEN 'overvalue'
+                             ELSE 'normal' END
+                    ELSE
+                        CASE WHEN COALESCE(dt.CIFVALTHB < ga.THRESHOLD_LOW, FALSE) THEN 'undervalue'
+                             WHEN COALESCE(dt.CIFVALTHB > ga.THRESHOLD_HIGH, FALSE) THEN 'overvalue'
+                             ELSE 'normal' END
+               END AS ALERT_STATUS
         FROM _decl_topic dt
         LEFT JOIN _group_agg ga ON dt.TOPIC = ga.TOPIC
         LEFT JOIN _group_agg_kg gk ON dt.TOPIC = gk.TOPIC
@@ -523,19 +531,15 @@ def persist_heading_result(
             "mean_price": float(row["MEAN_PRICE"]),
             "std_price": float(row["STD_PRICE"]) if pd.notna(row["STD_PRICE"]) else 0.0,
             "median_price": float(row["MEDIAN_PRICE"]),
-            "log_q1": float(row["LOG_Q1"]),
-            "log_q3": float(row["LOG_Q3"]),
             "count": int(row["N"]),
             "mean_price_per_kg": float(kg_row["MEAN_PRICE_PER_KG"]) if kg_row is not None else None,
-            "log_q1_per_kg": float(kg_row["LOG_Q1_KG"]) if kg_row is not None else None,
-            "log_q3_per_kg": float(kg_row["LOG_Q3_KG"]) if kg_row is not None else None,
             "n_with_weight": int(kg_row["N_WITH_WEIGHT"]) if kg_row is not None else 0,
             "sample_items": samples_by_topic.get(topic_id, []),
         }
 
     n_rows = con.execute("SELECT count(*) FROM cluster_results WHERE HEADING = ?", [heading]).fetchone()[0]
     n_flagged = con.execute(
-        "SELECT count(*) FROM cluster_results WHERE HEADING = ? AND ALERT_ANOMALY", [heading]
+        "SELECT count(*) FROM cluster_results WHERE HEADING = ? AND ALERT_STATUS != 'normal'", [heading]
     ).fetchone()[0]
     n_topics = int(group_agg["TOPIC"].nunique())
 
@@ -576,18 +580,19 @@ def query_topic_counts(con: duckdb.DuckDBPyConnection, heading: str) -> pd.DataF
 
 def count_alerts(con: duckdb.DuckDBPyConnection, heading: str) -> int:
     return con.execute(
-        "SELECT count(*) FROM cluster_results WHERE HEADING = ? AND ALERT_ANOMALY", [heading]
+        "SELECT count(*) FROM cluster_results WHERE HEADING = ? AND ALERT_STATUS != 'normal'", [heading]
     ).fetchone()[0]
 
 
 def query_alerts_page(con: duckdb.DuckDBPyConnection, heading: str, limit: int = 50, offset: int = 0) -> pd.DataFrame:
     return con.execute("""
         SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.CTYOGN, d.WGT, d.WGTUNT, d.WGT_KG, d.QTY, d.QTYUNT,
-               r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
-               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC
+               r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_LOW_CIFVALTHB, r.ALERT_THRESHOLD_HIGH_CIFVALTHB,
+               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_LOW_PRICE_PER_KG, r.ALERT_THRESHOLD_HIGH_PRICE_PER_KG,
+               r.ALERT_METRIC, r.ALERT_STATUS
         FROM cluster_results r
         JOIN declarations d ON r.DECL_ID = d.DECL_ID
-        WHERE r.HEADING = ? AND r.ALERT_ANOMALY
+        WHERE r.HEADING = ? AND r.ALERT_STATUS != 'normal'
         ORDER BY d.CIFVALTHB ASC
         LIMIT ? OFFSET ?
     """, [heading, limit, offset]).df()
@@ -597,11 +602,12 @@ def export_alerts_csv(con: duckdb.DuckDBPyConnection, heading: str, out_path: st
     con.execute("""
         COPY (
             SELECT d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.CTYOGN, d.WGT, d.WGTUNT, d.WGT_KG, d.QTY, d.QTYUNT,
-                   r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
-                   r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC
+                   r.TOPIC, d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_LOW_CIFVALTHB, r.ALERT_THRESHOLD_HIGH_CIFVALTHB,
+                   r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_LOW_PRICE_PER_KG, r.ALERT_THRESHOLD_HIGH_PRICE_PER_KG,
+                   r.ALERT_METRIC, r.ALERT_STATUS
             FROM cluster_results r
             JOIN declarations d ON r.DECL_ID = d.DECL_ID
-            WHERE r.HEADING = $heading AND r.ALERT_ANOMALY
+            WHERE r.HEADING = $heading AND r.ALERT_STATUS != 'normal'
             ORDER BY d.CIFVALTHB ASC
         ) TO '{path}' (HEADER, ENCODING UTF8)
     """.format(path=out_path), {"heading": heading})
@@ -620,8 +626,9 @@ def query_topic_items_page(
     """ดึงทุกแถว (ไม่กรองแค่ alert) ของ topic นี้ภายใน heading — ใช้ดูว่ากลุ่มนี้จับสินค้าอะไรมารวมกันบ้าง"""
     return con.execute("""
         SELECT d.DECL_ID, d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.CTYOGN, d.WGT, d.WGTUNT, d.WGT_KG, d.QTY, d.QTYUNT,
-               d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
-               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC, r.ALERT_ANOMALY
+               d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_LOW_CIFVALTHB, r.ALERT_THRESHOLD_HIGH_CIFVALTHB,
+               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_LOW_PRICE_PER_KG, r.ALERT_THRESHOLD_HIGH_PRICE_PER_KG,
+               r.ALERT_METRIC, r.ALERT_STATUS
         FROM cluster_results r
         JOIN declarations d ON r.DECL_ID = d.DECL_ID
         WHERE r.HEADING = ? AND r.TOPIC = ?
@@ -650,8 +657,9 @@ def query_full_results(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
         SELECT d.DECL_ID, d.POTLDG, d.IMPDCLNUM, d.DTELDG, d.CMPTAXNUM, d.CMPBRN, d.CMPNME, d.CMPNMEENG,
                d.TRFCLS, d.HEADING, d.CTYOGN, d.CIFVALTHB, d.GDSDSC, d.GDSDSCTH, d.WGT, d.WGTUNT,
                d.QTY, d.QTYUNT,
-               r.TOPIC, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
-               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC, r.ALERT_ANOMALY,
+               r.TOPIC, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_LOW_CIFVALTHB, r.ALERT_THRESHOLD_HIGH_CIFVALTHB,
+               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_LOW_PRICE_PER_KG, r.ALERT_THRESHOLD_HIGH_PRICE_PER_KG,
+               r.ALERT_METRIC, r.ALERT_STATUS,
                t.LABEL AS TOPIC_LABEL
         FROM declarations d
         LEFT JOIN cluster_results r ON d.DECL_ID = r.DECL_ID
@@ -664,8 +672,9 @@ def export_topic_items_csv(con: duckdb.DuckDBPyConnection, heading: str, topic: 
     con.execute("""
         COPY (
             SELECT d.DECL_ID, d.TRFCLS, d.GDSDSCTH, d.GDSDSC, d.CTYOGN, d.WGT, d.WGTUNT, d.WGT_KG, d.QTY, d.QTYUNT,
-                   d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
-                   r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC, r.ALERT_ANOMALY
+                   d.CIFVALTHB, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_LOW_CIFVALTHB, r.ALERT_THRESHOLD_HIGH_CIFVALTHB,
+                   r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_LOW_PRICE_PER_KG, r.ALERT_THRESHOLD_HIGH_PRICE_PER_KG,
+                   r.ALERT_METRIC, r.ALERT_STATUS
             FROM cluster_results r
             JOIN declarations d ON r.DECL_ID = d.DECL_ID
             WHERE r.HEADING = $heading AND r.TOPIC = $topic

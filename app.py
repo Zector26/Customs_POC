@@ -109,8 +109,9 @@ with tab_view:
                 )
                 st.dataframe(
                     topic_items.style.map(
-                        lambda v: "background-color: #ffcccc" if v is True else "",
-                        subset=["ALERT_ANOMALY"],
+                        lambda v: "background-color: #ffcccc" if v == "undervalue"
+                        else "background-color: #ffe4bc" if v == "overvalue" else "",
+                        subset=["ALERT_STATUS"],
                     ),
                     width="stretch", height=300,
                 )
@@ -128,14 +129,21 @@ with tab_view:
                         key=f"dl_topic_btn_{view_heading}_{view_topic}",
                     )
 
-            st.markdown("**รายการที่ถูก Alert ว่ามูลค่า CIF ผิดปกติ** (เรียงมูลค่าต่ำสุดก่อน)")
+            st.markdown("**รายการที่ถูก Alert ว่ามูลค่าผิดปกติ (Undervalue/Overvalue)** (เรียงมูลค่าต่ำสุดก่อน)")
             total_alerts = db.count_alerts(con, view_heading)
             n_pages = max(1, -(-total_alerts // ALERTS_PAGE_SIZE))
             page = st.number_input(
                 f"หน้า (1-{n_pages}, {total_alerts:,} รายการทั้งหมด)", min_value=1, max_value=n_pages, value=1,
             )
             alerts_page = db.query_alerts_page(con, view_heading, limit=ALERTS_PAGE_SIZE, offset=(page - 1) * ALERTS_PAGE_SIZE)
-            st.dataframe(alerts_page, width="stretch", height=300)
+            st.dataframe(
+                alerts_page.style.map(
+                    lambda v: "background-color: #ffcccc" if v == "undervalue"
+                    else "background-color: #ffe4bc" if v == "overvalue" else "",
+                    subset=["ALERT_STATUS"],
+                ),
+                width="stretch", height=300,
+            )
 
             if st.button("⬇️ เตรียมไฟล์ดาวน์โหลด Alert ของพิกัดนี้ (CSV)"):
                 import tempfile
@@ -170,20 +178,16 @@ with tab_test:
 
         check_price = st.checkbox("ระบุมูลค่า CIF (CIFVALTHB) เพื่อตรวจ anomaly", value=True)
         in_cifvalthb = None
-        test_method, test_alert_ratio, test_iqr_k = "iqr", 0.5, 1.5
+        test_alert_ratio = 0.5
         if check_price:
             col3, col4 = st.columns(2)
             with col3:
                 in_cifvalthb = st.number_input("CIFVALTHB (มูลค่า CIF รวม บาท)", min_value=0.0, value=1000.0, step=1.0)
-                test_method_label = st.radio(
-                    "วิธีคำนวณ threshold", ["IQR (robust)", "Ratio ต่อค่าเฉลี่ยกลุ่ม"], index=0, horizontal=True,
-                )
-                test_method = "iqr" if test_method_label.startswith("IQR") else "ratio"
             with col4:
-                if test_method == "iqr":
-                    test_iqr_k = st.slider("IQR multiplier (k)", 0.5, 3.0, 1.5, 0.1)
-                else:
-                    test_alert_ratio = st.slider("Alert เมื่อราคาต่ำกว่า X% ของค่าเฉลี่ยกลุ่ม", 10, 90, 50, 5) / 100
+                test_alert_ratio = st.slider(
+                    "Alert เมื่อราคาต่ำ/สูงกว่าค่าเฉลี่ยกลุ่มเกิน X%", 10, 90, 50, 5,
+                    help="เช่น 50% = ต่ำกว่าค่าเฉลี่ย 50% ขึ้นไปเป็น Undervalue, สูงกว่าค่าเฉลี่ย 50% ขึ้นไปเป็น Overvalue",
+                ) / 100
 
         check_weight = st.checkbox(
             "ระบุน้ำหนัก (WGT) เพื่อใช้ราคาต่อกิโลกรัมเทียบ (แม่นกว่ามูลค่ารวมเฉยๆ เพราะตัดผลจากปริมาณที่สั่งออกไป)",
@@ -218,8 +222,7 @@ with tab_test:
                 prediction = predict_new_item(
                     model_obj, group_stats, embedder,
                     gdsdsc=in_gdsdsc, gdsdscth=in_gdsdscth,
-                    cifvalthb=in_cifvalthb, wgt_kg=in_wgt_kg, alert_below_ratio=test_alert_ratio,
-                    method=test_method, iqr_k=test_iqr_k, pca=pca,
+                    cifvalthb=in_cifvalthb, wgt_kg=in_wgt_kg, alert_ratio=test_alert_ratio, pca=pca,
                 )
 
                 if prediction["is_noise"] or prediction["group_stats"] is None:
@@ -245,26 +248,30 @@ with tab_test:
                         )
 
                     if in_cifvalthb is not None:
-                        method_note = (
-                            f"IQR k={test_iqr_k:.1f}" if test_method == "iqr"
-                            else f"{test_alert_ratio:.0%} ของค่าเฉลี่ยกลุ่ม"
-                        )
+                        method_note = f"±{test_alert_ratio:.0%} ของค่าเฉลี่ยกลุ่ม"
+                        threshold_range = f"{prediction['threshold_low']:.2f} - {prediction['threshold_high']:.2f}"
                         if prediction.get("alert_metric") == "price_per_kg":
                             metric_value = in_cifvalthb / in_wgt_kg
-                            metric_label, threshold_label = f"{metric_value:.2f} บาท/กก.", f"{prediction['threshold']:.2f} บาท/กก."
+                            metric_label, unit = f"{metric_value:.2f} บาท/กก.", "บาท/กก."
                             st.caption("อิงจากราคาต่อกิโล (บาท/กก.) เพราะมีข้อมูลน้ำหนักที่ใช้ได้ — แม่นกว่าเทียบมูลค่ารวมเฉยๆ")
                         else:
-                            metric_label, threshold_label = f"{in_cifvalthb:.2f} บาท", f"{prediction['threshold']:.2f} บาท"
+                            metric_label, unit = f"{in_cifvalthb:.2f} บาท", "บาท"
                             st.caption("อิงจากมูลค่ารวม (บาท) เพราะไม่มีข้อมูลน้ำหนักที่ใช้ได้ (หรือกลุ่มนี้ไม่มีสถิติราคาต่อกิโลตอนเทรน)")
-                        if prediction["alert"]:
+                        status = prediction["status"]
+                        if status == "undervalue":
                             st.error(
-                                f"🚨 ALERT: ค่าที่คำนวณ ({metric_label}) ต่ำกว่า threshold "
-                                f"({threshold_label}, {method_note}) — สงสัยว่าสำแดงมูลค่าต่ำผิดปกติ"
+                                f"🚨 ALERT: ค่าที่คำนวณ ({metric_label}) ต่ำกว่าช่วงปกติ "
+                                f"({threshold_range} {unit}, {method_note}) — สงสัยว่าสำแดงมูลค่าต่ำผิดปกติ (Undervalue)"
+                            )
+                        elif status == "overvalue":
+                            st.warning(
+                                f"🔶 ALERT: ค่าที่คำนวณ ({metric_label}) สูงกว่าช่วงปกติ "
+                                f"({threshold_range} {unit}, {method_note}) — สงสัยว่าสำแดงมูลค่าสูงผิดปกติ (Overvalue)"
                             )
                         else:
                             st.info(
                                 f"✅ ค่าที่คำนวณ ({metric_label}) อยู่ในช่วงปกติ "
-                                f"(threshold แจ้งเตือนคือต่ำกว่า {threshold_label}, {method_note})"
+                                f"(ช่วงปกติคือ {threshold_range} {unit}, {method_note})"
                             )
 
                 if viz_df is not None and prediction["coords_2d"] is not None:

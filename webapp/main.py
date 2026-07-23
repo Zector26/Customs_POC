@@ -66,13 +66,15 @@ def _isna(v) -> bool:
 
 
 def _row_view(r: dict) -> dict:
-    """r: แถวจาก pipeline.run() — ALERT_ANOMALY เป็น True (undervalue) / False (ปกติ) / None (ไม่มี
+    """r: แถวจาก pipeline.run() — ALERT_STATUS เป็น 'undervalue' / 'overvalue' / 'normal' / None (ไม่มี
     ข้อมูลอ้างอิงให้ตัดสิน เพราะ heading นี้ไม่เคยเทรน หรือถูกจัดเป็น noise/กลุ่มที่ไม่มีสถิติราคา)"""
-    alert = r["ALERT_ANOMALY"]
-    if alert is True:
+    alert_status = r["ALERT_STATUS"]
+    if alert_status == "undervalue":
         status, status_label = "red", "สำแดงราคาต่ำผิดปกติ (Undervalue)"
-    elif alert is False:
-        status, status_label = "green", "ไม่พบความผิดปกติ (Not Undervalue)"
+    elif alert_status == "overvalue":
+        status, status_label = "orange", "สำแดงราคาสูงผิดปกติ (Overvalue)"
+    elif alert_status == "normal":
+        status, status_label = "green", "ไม่พบความผิดปกติ (Normal)"
     else:
         status, status_label = "unknown", "ไม่มีข้อมูลอ้างอิง (Unknown)"
     return {
@@ -85,7 +87,6 @@ def _row_view(r: dict) -> dict:
         "origin": r["CTYOGN"] or "-",
         "weight": f"{r['WGT']:,.1f} {r['WGTUNT']}" if not _isna(r["WGT"]) else "-",
         "cif": _money(r["CIFVALTHB"]),
-        "topic_label": r["TOPIC_LABEL"] or "-",
         "topic": r["TOPIC"],
         "heading": r["HEADING"],
         "status": status,
@@ -94,10 +95,13 @@ def _row_view(r: dict) -> dict:
         "tax": r["CMPTAXNUM"], "brn": r["CMPBRN"],
         "qty": f"{r['QTY']:,.0f} {r['QTYUNT']}" if not _isna(r["QTY"]) else "-",
         "group_mean": _money(r["GROUP_MEAN_CIFVALTHB"]) if not _isna(r["GROUP_MEAN_CIFVALTHB"]) else None,
-        "threshold": _money(r["ALERT_THRESHOLD_CIFVALTHB"]) if not _isna(r["ALERT_THRESHOLD_CIFVALTHB"]) else None,
+        "threshold_low": _money(r["ALERT_THRESHOLD_LOW_CIFVALTHB"]) if not _isna(r["ALERT_THRESHOLD_LOW_CIFVALTHB"]) else None,
+        "threshold_high": _money(r["ALERT_THRESHOLD_HIGH_CIFVALTHB"]) if not _isna(r["ALERT_THRESHOLD_HIGH_CIFVALTHB"]) else None,
         "group_mean_kg": _money(r["GROUP_MEAN_PRICE_PER_KG"]) if not _isna(r["GROUP_MEAN_PRICE_PER_KG"]) else None,
-        "threshold_kg": _money(r["ALERT_THRESHOLD_PRICE_PER_KG"]) if not _isna(r["ALERT_THRESHOLD_PRICE_PER_KG"]) else None,
+        "threshold_low_kg": _money(r["ALERT_THRESHOLD_LOW_PRICE_PER_KG"]) if not _isna(r["ALERT_THRESHOLD_LOW_PRICE_PER_KG"]) else None,
+        "threshold_high_kg": _money(r["ALERT_THRESHOLD_HIGH_PRICE_PER_KG"]) if not _isna(r["ALERT_THRESHOLD_HIGH_PRICE_PER_KG"]) else None,
         "alert_metric": r["ALERT_METRIC"],
+        "price_per_kg": _money(r["CIFVALTHB"] / r["WGT_KG"]) if not _isna(r["WGT_KG"]) and r["WGT_KG"] else "-",
     }
 
 
@@ -107,16 +111,17 @@ def _run_and_load():
     print("[webapp] เริ่มจำลองการประมวลผลชุดใบขนสินค้าขาเข้าจากไฟล์ทดสอบ...", flush=True)
     raw_rows, run_summary = pipeline.run(embedder=EMBEDDER)
     rows = [_row_view(r) for r in raw_rows]
-    order = {"red": 0, "green": 1, "unknown": 2}
+    order = {"red": 0, "orange": 1, "green": 2, "unknown": 3}
     rows.sort(key=lambda r: (order[r["status"]], r["decl_no"]))
     return rows, run_summary
 
 
 def _summary(rows: list[dict]) -> dict:
     n_red = sum(1 for r in rows if r["status"] == "red")
+    n_orange = sum(1 for r in rows if r["status"] == "orange")
     n_green = sum(1 for r in rows if r["status"] == "green")
     n_unknown = sum(1 for r in rows if r["status"] == "unknown")
-    return {"total": len(rows), "red": n_red, "green": n_green, "unknown": n_unknown}
+    return {"total": len(rows), "red": n_red, "orange": n_orange, "green": n_green, "unknown": n_unknown}
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -198,15 +198,16 @@ def predict_new_item(
     gdsdscth: str,
     cifvalthb: float = None,
     wgt_kg: float | None = None,
-    alert_below_ratio: float = 0.5,
-    method: str = "iqr",
-    iqr_k: float = 1.5,
+    alert_ratio: float = 0.5,
     pca=None,
 ) -> dict:
     """ทำนาย topic ของสินค้าใหม่ 1 รายการภายใน heading ที่กำหนด (ต้องโหลดโมเดล/group_stats ของ heading
     นั้นมาก่อนแล้ว) แล้วเทียบราคากับ threshold ของ topic นั้น (ถ้าใส่ cifvalthb มา) — ถ้ามี wgt_kg (> 0)
     และกลุ่มนี้มีสถิติราคาต่อกิโลจากตอนเทรน จะใช้ cifvalthb/wgt_kg เทียบแทน (แม่นกว่า เพราะตัดผลจากปริมาณ
-    ออกไป) มิฉะนั้น fallback ไปเทียบ cifvalthb แบบเดิม — ต้อง mirror logic เดียวกับ db.persist_heading_result"""
+    ออกไป) มิฉะนั้น fallback ไปเทียบ cifvalthb แบบเดิม — ต้อง mirror logic เดียวกับ db.persist_heading_result
+
+    threshold ต่ำ/สูงคำนวณจาก mean * (1 ± alert_ratio) — ต่ำกว่า threshold ต่ำ = undervalue, สูงกว่า
+    threshold สูง = overvalue, อยู่ระหว่างกลาง = normal"""
     text = build_text_for_embedding(gdsdscth, gdsdsc)
     embedding = embedder.encode([EMBEDDING_PREFIX + text], normalize_embeddings=True)
 
@@ -224,22 +225,24 @@ def predict_new_item(
         use_per_kg = wgt_kg is not None and wgt_kg > 0 and stats.get("mean_price_per_kg") is not None
         if use_per_kg:
             metric_value = cifvalthb / wgt_kg
-            mean_ref, log_q1, log_q3 = stats["mean_price_per_kg"], stats["log_q1_per_kg"], stats["log_q3_per_kg"]
+            mean_ref = stats["mean_price_per_kg"]
             alert_metric = "price_per_kg"
         else:
             metric_value = cifvalthb
-            mean_ref, log_q1, log_q3 = stats["mean_price"], stats["log_q1"], stats["log_q3"]
+            mean_ref = stats["mean_price"]
             alert_metric = "total_value"
 
-        if method == "ratio":
-            threshold = mean_ref * alert_below_ratio
-        elif method == "iqr":
-            lower_log = log_q1 - iqr_k * (log_q3 - log_q1)
-            threshold = float(np.exp(lower_log))
+        threshold_low = mean_ref * (1 - alert_ratio)
+        threshold_high = mean_ref * (1 + alert_ratio)
+        if metric_value < threshold_low:
+            status = "undervalue"
+        elif metric_value > threshold_high:
+            status = "overvalue"
         else:
-            raise ValueError(f"unknown method: {method}")
-        result["threshold"] = threshold
-        result["alert"] = metric_value < threshold
+            status = "normal"
+        result["threshold_low"] = threshold_low
+        result["threshold_high"] = threshold_high
+        result["status"] = status
         result["alert_metric"] = alert_metric
 
     if pca is not None:

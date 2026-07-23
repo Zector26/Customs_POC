@@ -32,7 +32,8 @@
 <div class="kpis">
   <div class="kpi" data-f="all"><div class="kpi-n">{{ stats.total }}</div><div class="kpi-l">รายการทั้งหมด</div><div class="kpi-x">ใบขนสินค้าขาเข้า</div></div>
   <div class="kpi red" data-f="red"><div class="kpi-n">{{ stats.red }}</div><div class="kpi-l">Undervalue</div><div class="kpi-x">สำแดงราคาต่ำผิดปกติ</div></div>
-  <div class="kpi green" data-f="green"><div class="kpi-n">{{ stats.green }}</div><div class="kpi-l">Not Undervalue</div><div class="kpi-x">ไม่พบความผิดปกติ</div></div>
+  <div class="kpi orange" data-f="orange"><div class="kpi-n">{{ stats.orange }}</div><div class="kpi-l">Overvalue</div><div class="kpi-x">สำแดงราคาสูงผิดปกติ</div></div>
+  <div class="kpi green" data-f="green"><div class="kpi-n">{{ stats.green }}</div><div class="kpi-l">Normal</div><div class="kpi-x">ไม่พบความผิดปกติ</div></div>
   <div class="kpi unknown" data-f="unknown"><div class="kpi-n">{{ stats.unknown }}</div><div class="kpi-l">Unknown</div><div class="kpi-x">ไม่มีข้อมูลอ้างอิง</div></div>
 </div>
 
@@ -41,11 +42,12 @@
     <div class="seg" id="seg-status">
       <button data-v="all" class="on">ทั้งหมด</button>
       <button data-v="red">Undervalue</button>
-      <button data-v="green">Not Undervalue</button>
+      <button data-v="orange">Overvalue</button>
+      <button data-v="green">Normal</button>
       <button data-v="unknown">Unknown</button>
     </div>
   </div>
-  <input id="q" class="search" type="search" placeholder="ค้นหา เลขที่ใบขนสินค้า / ผู้นำเข้า / พิกัดศุลกากร / ถิ่นกำเนิด">
+  <input id="q" class="search" type="search" placeholder="ค้นหา เลขที่ใบขนสินค้า / ผู้นำเข้า / พิกัดศุลกากร / คำบรรยาย">
   <span class="count" id="count"></span>
 </div>
 
@@ -54,26 +56,26 @@
 <thead>
 <tr>
   <th>เลขที่ใบขนสินค้า</th><th>วันที่ผ่านพิธีการ</th><th>ประเภท</th><th class="l">ผู้นำเข้า</th>
-  <th>พิกัดศุลกากร</th><th>ถิ่นกำเนิด</th><th class="r">น้ำหนัก</th><th class="r">มูลค่า CIF (บาท)</th>
-  <th class="l">ผลการจัดกลุ่ม</th><th>สถานะ</th>
+  <th>พิกัดศุลกากร</th><th>Topic</th><th class="r">ราคาต่อน้ำหนัก (บาท/กก.)</th>
+  <th class="r">ราคาเฉลี่ยต่อน้ำหนักของกลุ่ม (บาท/กก.)</th><th class="l">คำบรรยาย (ไทย)</th><th>สถานะ</th>
 </tr>
 </thead>
 <tbody id="rows">
 {% for r in rows %}
 <tr class="row ch-{{ r.status }}" data-ref="{{ r.decl_id }}"
     data-status="{{ r.status }}"
-    data-s="{{ r.decl_no }} {{ r.importer }} {{ r.importer_eng }} {{ r.trfcls }} {{ r.origin }}">
+    data-s="{{ r.decl_no }} {{ r.importer }} {{ r.importer_eng }} {{ r.trfcls }} {{ r.gdsdscth }}">
   <td class="mono">{{ r.decl_no }}</td>
   <td class="mono dim">{{ r.date_disp }}</td>
   <td><span class="kind import">ขาเข้า</span></td>
   <td class="l"><div class="tname">{{ r.importer }}</div><div class="tprofile">{{ r.importer_eng }}</div></td>
   <td class="mono">{{ r.trfcls }}</td>
-  <td>{{ r.origin }}</td>
-  <td class="r mono">{{ r.weight }}</td>
-  <td class="r mono">{{ r.cif }}</td>
-  <td class="l"><div class="tprofile">{{ r.topic_label }}</div></td>
+  <td class="mono">{{ r.topic }}</td>
+  <td class="r mono">{{ r.price_per_kg }}</td>
+  <td class="r mono">{{ r.group_mean_kg or '-' }}</td>
+  <td class="l"><div class="tprofile">{{ r.gdsdscth }}</div></td>
   <td><span class="status {{ r.status }}">
-    {% if r.status == 'red' %}Undervalue{% elif r.status == 'green' %}Not Undervalue{% else %}Unknown{% endif %}
+    {% if r.status == 'red' %}Undervalue{% elif r.status == 'orange' %}Overvalue{% elif r.status == 'green' %}Normal{% else %}Unknown{% endif %}
   </span></td>
 </tr>
 {% endfor %}
