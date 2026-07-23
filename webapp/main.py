@@ -14,7 +14,9 @@
 แล้วเปิด http://127.0.0.1:8800 — รัน localhost เท่านั้น ไม่ deploy ขึ้น cloud ใด ๆ
 """
 
+import json
 import pathlib
+import time
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
@@ -30,6 +32,11 @@ BASE = pathlib.Path(__file__).resolve().parent
 app = FastAPI(title="ระบบแสดงผลการจัดกลุ่มและตรวจสอบราคาใบขนสินค้าขาเข้า (Demo)")
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE / "templates"))
+
+# กัน browser cache เสิร์ฟ app.js/app.css เวอร์ชันเก่าค้างไว้ข้าม deploy (StaticFiles ไม่ตั้ง Cache-Control
+# ให้ เบราว์เซอร์จึงใช้ heuristic cache เอง) — ผูก query param ท้าย URL asset ไว้กับเวลาที่ process นี้เริ่ม
+# rebuild/restart ครั้งใหม่ = process ใหม่ = ค่านี้เปลี่ยน = เบราว์เซอร์บังคับโหลด asset ใหม่เสมอ
+ASSET_V = int(time.time())
 
 print("[webapp] กำลังโหลดโมเดล embedding (ครั้งเดียวตอน process เริ่ม)...", flush=True)
 EMBEDDER = load_embedder()
@@ -110,18 +117,10 @@ def _run_and_load():
     รีเฟรชหน้าแรก (ไม่ใช่แค่ตอน process เริ่ม) ดู module docstring ด้านบน"""
     print("[webapp] เริ่มจำลองการประมวลผลชุดใบขนสินค้าขาเข้าจากไฟล์ทดสอบ...", flush=True)
     raw_rows, run_summary = pipeline.run(embedder=EMBEDDER)
+    # เรียงตามลำดับที่เข้ามาจริง (DTELDG, IMPDCLNUM จาก pipeline.run) ไม่เรียงตามสถานะ — เพื่อให้หน้าเว็บ
+    # ไล่แสดงทีละรายการตามลำดับที่ transaction "เข้ามา" ได้ ไม่ใช่โชว์รายการผิดปกติก่อนล่วงหน้า
     rows = [_row_view(r) for r in raw_rows]
-    order = {"red": 0, "orange": 1, "green": 2, "unknown": 3}
-    rows.sort(key=lambda r: (order[r["status"]], r["decl_no"]))
     return rows, run_summary
-
-
-def _summary(rows: list[dict]) -> dict:
-    n_red = sum(1 for r in rows if r["status"] == "red")
-    n_orange = sum(1 for r in rows if r["status"] == "orange")
-    n_green = sum(1 for r in rows if r["status"] == "green")
-    n_unknown = sum(1 for r in rows if r["status"] == "unknown")
-    return {"total": len(rows), "red": n_red, "orange": n_orange, "green": n_green, "unknown": n_unknown}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -129,8 +128,11 @@ def index(request: Request):
     rows, run_summary = _run_and_load()
     _LAST_BY_ID.clear()
     _LAST_BY_ID.update({r["decl_id"]: r for r in rows})
+    # ผลพยากรณ์ของทุกรายการคำนวณเสร็จแล้วในขั้นนี้ (ต้องรันเป็น batch เพราะสถิติกลุ่มต้องใช้ทั้งไฟล์)
+    # แต่ส่งลง JS เป็นคิว แล้วให้หน้าเว็บ "เปิดเผย" ผลทีละรายการ จำลองว่าระบบกำลังตรวจแต่ละใบขนสด ๆ
+    rows_json = json.dumps(rows, ensure_ascii=False).replace("</", "<\\/")
     return templates.TemplateResponse(request, "index.html", {
-        "rows": rows, "stats": _summary(rows), "run": run_summary,
+        "rows_json": rows_json, "total": len(rows), "run": run_summary, "asset_v": ASSET_V,
     })
 
 

@@ -34,6 +34,27 @@ body{font-family:'Sarabun',-apple-system,'Segoe UI',sans-serif;color:var(--ink);
 .kpi-x{font-size:11px;color:var(--muted)}
 .kpi.active{outline:2px solid var(--accent);outline-offset:-1px}
 
+/* stage: การไล่ประมวลผลทีละ transaction */
+.stage{margin:6px 24px 0;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;overflow:hidden}
+.stage-bar{height:4px;background:var(--line);border-radius:2px;margin-bottom:12px;overflow:hidden}
+.stage-fill{height:100%;width:0;background:var(--accent);transition:width .25s ease}
+.stage-row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.stage-main{display:flex;align-items:center;gap:12px;min-width:0;flex:1}
+.stage-badge{font-size:12px;font-weight:700;padding:5px 12px;border-radius:6px;white-space:nowrap;letter-spacing:.2px}
+.stage-badge.processing{background:#eef1f5;color:var(--muted);animation:pulse 1s ease-in-out infinite}
+.stage-badge.red{background:var(--red-bg);color:var(--red)}
+.stage-badge.orange{background:var(--orange-bg);color:var(--orange)}
+.stage-badge.green{background:var(--green-bg);color:var(--green)}
+.stage-badge.unknown{background:var(--gray-bg);color:var(--gray)}
+.stage-badge.done{background:var(--navy);color:#fff}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.stage-ref{font-weight:700;white-space:nowrap}
+.stage-desc{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stage-side{display:flex;align-items:center;gap:14px;font-size:12.5px;color:var(--muted);white-space:nowrap}
+.stage-side button{border:1px solid var(--line);background:#fff;color:var(--accent);font-family:inherit;font-size:12.5px;padding:6px 12px;border-radius:7px;cursor:pointer}
+.stage-side button:hover{background:#f3f8ff}
+.stage-side button:disabled{opacity:.4;cursor:default}
+
 /* toolbar */
 .toolbar{display:flex;align-items:center;gap:14px;padding:10px 24px;flex-wrap:wrap}
 .filters{display:flex;gap:10px}

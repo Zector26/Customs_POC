@@ -52,6 +52,95 @@ async function openDrawer(ref){
 function closeDrawer(){bg.classList.remove('show');dr.classList.remove('show');}
 bg.addEventListener('click',closeDrawer);
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
-document.querySelectorAll('#rows .row').forEach(tr=>tr.addEventListener('click',()=>openDrawer(tr.dataset.ref)));
+// ผูก event แบบ delegation เพราะแถวถูกเติมเข้า tbody ทีละแถวตอนไล่ประมวลผล ไม่ได้มีตั้งแต่โหลดหน้า
+document.getElementById('rows').addEventListener('click',e=>{
+  const tr=e.target.closest('.row');
+  if(tr) openDrawer(tr.dataset.ref);
+});
+
+// ไล่ประมวลผลทีละ transaction (auto-play) — จำลองว่า transaction เข้ามาให้ระบบตรวจทีละใบ
+const STATUS_LABEL={red:'Undervalue',orange:'Overvalue',green:'Normal',unknown:'Unknown'};
+const GUARD_MSG={
+  red:'🚩 สงสัยว่าสำแดงราคาต่ำผิดปกติ',
+  orange:'🔶 สงสัยว่าสำแดงราคาสูงผิดปกติ',
+  green:'✓ ไม่พบความผิดปกติ',
+  unknown:'⚪ ไม่มีข้อมูลอ้างอิงให้ตัดสิน',
+};
+const PROCESS_MS=650, GAP_MS=250;
+const ROWS=JSON.parse(document.getElementById('rows-data').textContent);
+const rowsBody=document.getElementById('rows');
+const counts={red:0,orange:0,green:0,unknown:0};
+let idx=0, skipped=false;
+
+function sleep(ms){return new Promise(res=>setTimeout(res,ms));}
+
+function rowHtml(r){
+  return `<tr class="row ch-${r.status}" data-ref="${r.decl_id}" data-status="${r.status}"
+      data-s="${(r.decl_no+' '+r.importer+' '+r.importer_eng+' '+r.trfcls+' '+r.gdsdscth).toLowerCase()}">
+    <td class="mono">${r.decl_no}</td>
+    <td class="mono dim">${r.date_disp}</td>
+    <td><span class="kind import">ขาเข้า</span></td>
+    <td class="l"><div class="tname">${r.importer}</div><div class="tprofile">${r.importer_eng}</div></td>
+    <td class="mono">${r.trfcls}</td>
+    <td class="mono">${r.topic ?? '-'}</td>
+    <td class="r mono">${r.price_per_kg}</td>
+    <td class="r mono">${r.group_mean_kg ?? '-'}</td>
+    <td class="l"><div class="tprofile">${r.gdsdscth}</div></td>
+    <td><span class="status ${r.status}">${STATUS_LABEL[r.status]}</span></td>
+  </tr>`;
+}
+
+function showProcessing(r){
+  document.getElementById('stagebadge').className='stage-badge processing';
+  document.getElementById('stagebadge').textContent='กำลังประมวลผล...';
+  document.getElementById('stageref').textContent=r.decl_no;
+  document.getElementById('stagedesc').textContent=r.gdsdscth||r.gdsdsc||'';
+}
+
+function commitRow(r){
+  rowsBody.insertAdjacentHTML('beforeend',rowHtml(r));
+  counts[r.status]++;
+  document.getElementById('kpi-'+r.status).textContent=counts[r.status];
+  document.getElementById('kpi-total').textContent=(idx+1);
+  applyFilters();
+}
+
+function revealResult(r){
+  const badge=document.getElementById('stagebadge');
+  badge.className='stage-badge '+r.status;
+  badge.textContent=STATUS_LABEL[r.status];
+  document.getElementById('stagedesc').textContent=GUARD_MSG[r.status];
+  commitRow(r);
+  document.getElementById('stagecount').textContent=(idx+1)+' / '+ROWS.length;
+  document.getElementById('stagefill').style.width=(100*(idx+1)/ROWS.length)+'%';
+}
+
+async function playNext(){
+  if(skipped || idx>=ROWS.length){ finish(); return; }
+  const r=ROWS[idx];
+  showProcessing(r);
+  await sleep(PROCESS_MS);
+  if(skipped) return;
+  revealResult(r);
+  idx++;
+  await sleep(GAP_MS);
+  playNext();
+}
+
+function finish(){
+  if(skipped){
+    for(;idx<ROWS.length;idx++) commitRow(ROWS[idx]);
+    document.getElementById('stagecount').textContent=ROWS.length+' / '+ROWS.length;
+    document.getElementById('stagefill').style.width='100%';
+  }
+  document.getElementById('stagebadge').className='stage-badge done';
+  document.getElementById('stagebadge').textContent='เสร็จสิ้น';
+  document.getElementById('stageref').textContent='—';
+  document.getElementById('stagedesc').textContent='ประมวลผลครบ '+ROWS.length+' รายการแล้ว';
+  document.getElementById('skipbtn').disabled=true;
+}
+
+document.getElementById('skipbtn').addEventListener('click',()=>{skipped=true;finish();});
 
 applyFilters();
+if(ROWS.length) playNext(); else finish();

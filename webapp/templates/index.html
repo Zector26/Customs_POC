@@ -6,7 +6,7 @@
 <title>ระบบแสดงผลการจัดกลุ่มและตรวจสอบราคาใบขนสินค้าขาเข้า (Demo)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
 </head>
 <body>
 <header class="topbar">
@@ -23,18 +23,30 @@
 </header>
 
 <div class="runinfo">
-  จำลองรับใบขนสินค้าขาเข้าเข้าระบบ <b>{{ run.n_rows }}</b> รายการ จากไฟล์ทดสอบ · ตรงกับโมเดลที่ขา train เทรนไว้แล้ว
-  <b>{{ run.n_headings_matched }}</b>/{{ run.n_headings_seen }} พิกัด
-  {% if run.n_no_reference %}· <b>{{ run.n_no_reference }}</b> รายการไม่มีข้อมูลอ้างอิง (พิกัดยังไม่เคยเทรน){% endif %} ·
-  ประมวลผลใหม่ทุกครั้งที่เปิดหน้านี้ (จำลองว่ามีชุด transaction เข้ามาให้ระบบตรวจ — พยากรณ์เทียบกับโมเดลขา train ไม่ได้เทรนเอง)
+  จำลองรับใบขนสินค้าขาเข้าเข้าระบบ <b>{{ run.n_rows }}</b> รายการ จากไฟล์ทดสอบ
 </div>
 
 <div class="kpis">
-  <div class="kpi" data-f="all"><div class="kpi-n">{{ stats.total }}</div><div class="kpi-l">รายการทั้งหมด</div><div class="kpi-x">ใบขนสินค้าขาเข้า</div></div>
-  <div class="kpi red" data-f="red"><div class="kpi-n">{{ stats.red }}</div><div class="kpi-l">Undervalue</div><div class="kpi-x">สำแดงราคาต่ำผิดปกติ</div></div>
-  <div class="kpi orange" data-f="orange"><div class="kpi-n">{{ stats.orange }}</div><div class="kpi-l">Overvalue</div><div class="kpi-x">สำแดงราคาสูงผิดปกติ</div></div>
-  <div class="kpi green" data-f="green"><div class="kpi-n">{{ stats.green }}</div><div class="kpi-l">Normal</div><div class="kpi-x">ไม่พบความผิดปกติ</div></div>
-  <div class="kpi unknown" data-f="unknown"><div class="kpi-n">{{ stats.unknown }}</div><div class="kpi-l">Unknown</div><div class="kpi-x">ไม่มีข้อมูลอ้างอิง</div></div>
+  <div class="kpi" data-f="all"><div class="kpi-n" id="kpi-total">0</div><div class="kpi-l">ประมวลผลแล้ว</div><div class="kpi-x">จาก {{ total }} รายการ</div></div>
+  <div class="kpi red" data-f="red"><div class="kpi-n" id="kpi-red">0</div><div class="kpi-l">Undervalue</div><div class="kpi-x">สำแดงราคาต่ำผิดปกติ</div></div>
+  <div class="kpi orange" data-f="orange"><div class="kpi-n" id="kpi-orange">0</div><div class="kpi-l">Overvalue</div><div class="kpi-x">สำแดงราคาสูงผิดปกติ</div></div>
+  <div class="kpi green" data-f="green"><div class="kpi-n" id="kpi-green">0</div><div class="kpi-l">Normal</div><div class="kpi-x">ไม่พบความผิดปกติ</div></div>
+  <div class="kpi unknown" data-f="unknown"><div class="kpi-n" id="kpi-unknown">0</div><div class="kpi-l">Unknown</div><div class="kpi-x">ไม่มีข้อมูลอ้างอิง</div></div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="stage-bar"><div class="stage-fill" id="stagefill"></div></div>
+  <div class="stage-row">
+    <div class="stage-main">
+      <span class="stage-badge processing" id="stagebadge">กำลังประมวลผล...</span>
+      <span class="mono stage-ref" id="stageref">—</span>
+      <span class="stage-desc" id="stagedesc"></span>
+    </div>
+    <div class="stage-side">
+      <span id="stagecount">0 / {{ total }}</span>
+      <button id="skipbtn" type="button">ข้ามไปดูทั้งหมด »</button>
+    </div>
+  </div>
 </div>
 
 <div class="toolbar">
@@ -60,33 +72,14 @@
   <th class="r">ราคาเฉลี่ยต่อน้ำหนักของกลุ่ม (บาท/กก.)</th><th class="l">คำบรรยาย (ไทย)</th><th>สถานะ</th>
 </tr>
 </thead>
-<tbody id="rows">
-{% for r in rows %}
-<tr class="row ch-{{ r.status }}" data-ref="{{ r.decl_id }}"
-    data-status="{{ r.status }}"
-    data-s="{{ r.decl_no }} {{ r.importer }} {{ r.importer_eng }} {{ r.trfcls }} {{ r.gdsdscth }}">
-  <td class="mono">{{ r.decl_no }}</td>
-  <td class="mono dim">{{ r.date_disp }}</td>
-  <td><span class="kind import">ขาเข้า</span></td>
-  <td class="l"><div class="tname">{{ r.importer }}</div><div class="tprofile">{{ r.importer_eng }}</div></td>
-  <td class="mono">{{ r.trfcls }}</td>
-  <td class="mono">{{ r.topic }}</td>
-  <td class="r mono">{{ r.price_per_kg }}</td>
-  <td class="r mono">{{ r.group_mean_kg or '-' }}</td>
-  <td class="l"><div class="tprofile">{{ r.gdsdscth }}</div></td>
-  <td><span class="status {{ r.status }}">
-    {% if r.status == 'red' %}Undervalue{% elif r.status == 'orange' %}Overvalue{% elif r.status == 'green' %}Normal{% else %}Unknown{% endif %}
-  </span></td>
-</tr>
-{% endfor %}
-</tbody>
+<tbody id="rows"></tbody>
 </table>
 </div>
 
 <div class="drawer-bg" id="drawerbg"></div>
 <aside class="drawer" id="drawer"><div class="drawer-body" id="drawerbody"></div></aside>
 
-<footer class="foot">ข้อมูลในระบบนี้เป็นข้อมูลจำลองเพื่อการสาธิต (test file) · ไม่มีการเชื่อมต่อ LLM ใด ๆ · รันบน localhost เท่านั้น</footer>
-<script src="/static/app.js"></script>
+<script id="rows-data" type="application/json">{{ rows_json | safe }}</script>
+<script src="/static/app.js?v={{ asset_v }}"></script>
 </body>
 </html>
