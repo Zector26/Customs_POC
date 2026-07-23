@@ -1,0 +1,68 @@
+<div class="dh ch-{{ r.status }}">
+  <button class="dclose" onclick="closeDrawer()">✕</button>
+  <div class="dh-top">
+    <span class="status big {{ r.status }}">
+      {% if r.status == 'red' %}Undervalue{% elif r.status == 'green' %}Not Undervalue{% else %}Unknown{% endif %}
+    </span>
+    <span class="kind import">ใบขนสินค้าขาเข้า</span>
+  </div>
+  <h2 class="mono">{{ r.decl_no }}</h2>
+  <div class="dh-meta">
+    <span>วันที่ผ่านพิธีการ {{ r.date_disp }}</span><span>·</span>
+    <span>พิกัดศุลกากร {{ r.trfcls }}</span><span>·</span>
+    <span>ถิ่นกำเนิด {{ r.origin }}</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-h">ผลการจัดกลุ่ม (BERTopic)</div>
+  <div class="kv">
+    <div><label>พิกัด (TRFCLS 8 หลักแรก)</label><span class="mono">{{ r.heading }}</span></div>
+    <div><label>Topic</label><span class="mono">{{ r.topic }}</span></div>
+  </div>
+  <div class="topiclabel">คำสำคัญของกลุ่ม: {{ r.topic_label }}</div>
+</div>
+
+<div class="card">
+  <div class="card-h">การตรวจสอบราคาผิดปกติ (Anomaly)</div>
+  <div class="kv">
+    <div><label>มูลค่า CIF ของรายการนี้ (บาท)</label><span class="mono">{{ r.cif }}</span></div>
+    {% if r.group_mean %}
+    <div><label>ค่าเฉลี่ยของกลุ่ม (บาท) — จากขา train</label><span class="mono">{{ r.group_mean }}</span></div>
+    <div><label>Threshold แจ้งเตือน (บาท)</label><span class="mono">{{ r.threshold }}</span></div>
+    {% endif %}
+    {% if r.group_mean_kg %}
+    <div><label>ราคาเฉลี่ยต่อกิโลของกลุ่ม (บาท/กก.)</label><span class="mono">{{ r.group_mean_kg }}</span></div>
+    <div><label>Threshold ต่อกิโล (บาท/กก.)</label><span class="mono">{{ r.threshold_kg }}</span></div>
+    {% endif %}
+    {% if r.group_mean %}
+    <div><label>ตัวชี้วัดที่ใช้เทียบ</label><span>{{ 'ราคาต่อกิโลกรัม' if r.alert_metric == 'price_per_kg' else 'มูลค่ารวม (CIF)' }}</span></div>
+    {% endif %}
+  </div>
+  {% if r.status == 'red' %}
+  <div class="guard block">🚩 มูลค่าที่สำแดงต่ำกว่า threshold ของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาต่ำผิดปกติ (Undervalue)</div>
+  {% elif r.status == 'green' %}
+  <div class="guard ok">✓ มูลค่าที่สำแดงอยู่ในช่วงปกติเมื่อเทียบกับกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้)</div>
+  {% else %}
+  <div class="guard">⚪ ยังตัดสินไม่ได้ — พิกัดนี้ไม่มีโมเดล/สถิติราคาจากขา train ให้เทียบ (อาจยังไม่เคยเทรน หรือถูกจัดเป็น noise) ต้องรัน/รอผลขา train ก่อนถึงจะประเมินรายการนี้ได้</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-h">รายละเอียดสินค้า</div>
+  <div class="kv">
+    <div><label>คำบรรยาย (อังกฤษ)</label><span>{{ r.gdsdsc }}</span></div>
+    <div><label>คำบรรยาย (ไทย)</label><span>{{ r.gdsdscth }}</span></div>
+    <div><label>น้ำหนัก</label><span class="mono">{{ r.weight }}</span></div>
+    <div><label>ปริมาณ</label><span class="mono">{{ r.qty }}</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-h">ผู้นำเข้า</div>
+  <div class="kv">
+    <div><label>ชื่อ (ไทย)</label><span>{{ r.importer }}</span></div>
+    <div><label>ชื่อ (อังกฤษ)</label><span>{{ r.importer_eng }}</span></div>
+    <div><label>เลขประจำตัวผู้เสียภาษี</label><span class="mono">{{ r.tax }} / {{ r.brn }}</span></div>
+  </div>
+</div>

@@ -33,6 +33,12 @@ DECLARATION_COLUMNS = ["DECL_ID", "TRFCLS", "GDSDSC", "GDSDSCTH", "CIFVALTHB"]
 # เอาไปหา "ราคาต่อกิโล" (CIFVALTHB / WGT_KG) เป็น anomaly metric ที่แม่นกว่ามูลค่ารวมเฉยๆ (ตัดผลจากปริมาณ
 # ที่สั่งออกไป) — ถ้าแถวไหนไม่มีข้อมูลน้ำหนักที่ใช้ได้ จะ fallback ไปเทียบ CIFVALTHB แบบเดิม
 OPTIONAL_INPUT_COLUMNS = ["CTYOGN", "WGT", "WGTUNT", "QTY", "QTYUNT"]
+# คอลัมน์ metadata ล้วน ๆ สำหรับแสดงผลหน้าเว็บ (ไม่มีผลต่อการคำนวณ embedding/clustering/anomaly เลย) —
+# เก็บไว้เฉย ๆ เพื่อ join กลับมาแสดงพร้อมผลการจัดกลุ่ม (ดู webapp/)
+DISPLAY_METADATA_COLUMNS = [
+    "POTLDG", "IMPDCLNUM", "DTELDG", "CMPTAXNUM", "CMPBRN", "CMPNME", "CMPNMEENG",
+]
+OPTIONAL_INPUT_COLUMNS = OPTIONAL_INPUT_COLUMNS + DISPLAY_METADATA_COLUMNS
 # DECL_ID ไม่บังคับต้องมีในไฟล์ต้นทาง (ไฟล์ export จริงหลายระบบไม่มีคอลัมน์เลขที่ใบขนสินค้าให้) — ถ้าไม่มี
 # จะสร้างให้อัตโนมัติตอน ingest (ดู _ensure_decl_id) คอลัมน์ที่เหลือยังบังคับต้องมีครบ
 REQUIRED_INPUT_COLUMNS = [c for c in DECLARATION_COLUMNS if c != "DECL_ID"]
@@ -95,6 +101,8 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
     # ต้อง ALTER TABLE เพิ่มให้ทุกครั้งที่ init (idempotent, รันซ้ำได้ไม่ error) เพื่อ migrate DB ไฟล์เก่า
     for col_def in [
         "CTYOGN VARCHAR", "WGT DOUBLE", "WGTUNT VARCHAR", "WGT_KG DOUBLE", "QTY DOUBLE", "QTYUNT VARCHAR",
+        "POTLDG VARCHAR", "IMPDCLNUM VARCHAR", "DTELDG VARCHAR", "CMPTAXNUM VARCHAR", "CMPBRN VARCHAR",
+        "CMPNME VARCHAR", "CMPNMEENG VARCHAR",
     ]:
         con.execute(f"ALTER TABLE declarations ADD COLUMN IF NOT EXISTS {col_def}")
     con.execute("CREATE INDEX IF NOT EXISTS idx_declarations_hash ON declarations(TEXT_HASH)")
@@ -121,6 +129,14 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
     ]:
         con.execute(f"ALTER TABLE cluster_results ADD COLUMN IF NOT EXISTS {col_def}")
     con.execute("CREATE INDEX IF NOT EXISTS idx_cluster_results_heading ON cluster_results(HEADING)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS topic_labels (
+            HEADING VARCHAR,
+            TOPIC INTEGER,
+            LABEL VARCHAR,
+            PRIMARY KEY (HEADING, TOPIC)
+        )
+    """)
     con.execute("""
         CREATE TABLE IF NOT EXISTS weight_unit_conversion (
             WGTUNT VARCHAR PRIMARY KEY,
@@ -231,10 +247,13 @@ def _insert_chunk(con: duckdb.DuckDBPyConnection, chunk: pd.DataFrame, row_offse
     con.execute(f"""
         INSERT INTO declarations
             (DECL_ID, TRFCLS, GDSDSC, GDSDSCTH, CIFVALTHB, TEXT_HASH, HEADING,
-             CTYOGN, WGT, WGTUNT, WGT_KG, QTY, QTYUNT)
+             CTYOGN, WGT, WGTUNT, WGT_KG, QTY, QTYUNT,
+             POTLDG, IMPDCLNUM, DTELDG, CMPTAXNUM, CMPBRN, CMPNME, CMPNMEENG)
         SELECT c.DECL_ID, c.TRFCLS, c.GDSDSC, c.GDSDSCTH, c.CIFVALTHB,
                md5({text_sql}) AS TEXT_HASH, {head_sql} AS HEADING,
-               c.CTYOGN, c.WGT, c.WGTUNT, c.WGT * w.FACTOR_TO_KG AS WGT_KG, c.QTY, c.QTYUNT
+               c.CTYOGN, c.WGT, c.WGTUNT, c.WGT * w.FACTOR_TO_KG AS WGT_KG, c.QTY, c.QTYUNT,
+               CAST(c.POTLDG AS VARCHAR), CAST(c.IMPDCLNUM AS VARCHAR), CAST(c.DTELDG AS VARCHAR),
+               CAST(c.CMPTAXNUM AS VARCHAR), CAST(c.CMPBRN AS VARCHAR), c.CMPNME, c.CMPNMEENG
         FROM _chunk c
         LEFT JOIN weight_unit_conversion w ON c.WGTUNT = w.WGTUNT
     """)
@@ -609,6 +628,36 @@ def query_topic_items_page(
         ORDER BY d.CIFVALTHB ASC
         LIMIT ? OFFSET ?
     """, [heading, topic, limit, offset]).df()
+
+
+def save_topic_labels(con: duckdb.DuckDBPyConnection, heading: str, labels: dict[int, str]) -> None:
+    """เก็บป้ายชื่อ (คำสำคัญ top words จาก BERTopic) ต่อ topic ของ heading นี้ — ใช้แสดงผล 'ผลการจัดกลุ่ม'
+    ให้อ่านง่ายกว่าเลข topic ดิบ ๆ บนเว็บ"""
+    con.execute("DELETE FROM topic_labels WHERE HEADING = ?", [heading])
+    for topic_id, label in labels.items():
+        con.execute("INSERT INTO topic_labels VALUES (?, ?, ?)", [heading, int(topic_id), label])
+
+
+def get_topic_labels_map(con: duckdb.DuckDBPyConnection) -> dict[tuple[str, int], str]:
+    rows = con.execute("SELECT HEADING, TOPIC, LABEL FROM topic_labels").fetchall()
+    return {(heading, int(topic)): label for heading, topic, label in rows}
+
+
+def query_full_results(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """ดึงทุกแถวพร้อมผลการจัดกลุ่ม + anomaly — สำหรับหน้าเว็บแสดงผลไฟล์ทดสอบ (ไม่แบ่งหน้า เพราะไฟล์ทดสอบ
+    มีขนาดเล็ก) เรียงตามวันที่ผ่านพิธีการแล้วเลขที่ใบขนสินค้า"""
+    return con.execute("""
+        SELECT d.DECL_ID, d.POTLDG, d.IMPDCLNUM, d.DTELDG, d.CMPTAXNUM, d.CMPBRN, d.CMPNME, d.CMPNMEENG,
+               d.TRFCLS, d.HEADING, d.CTYOGN, d.CIFVALTHB, d.GDSDSC, d.GDSDSCTH, d.WGT, d.WGTUNT,
+               d.QTY, d.QTYUNT,
+               r.TOPIC, r.GROUP_MEAN_CIFVALTHB, r.ALERT_THRESHOLD_CIFVALTHB,
+               r.GROUP_MEAN_PRICE_PER_KG, r.ALERT_THRESHOLD_PRICE_PER_KG, r.ALERT_METRIC, r.ALERT_ANOMALY,
+               t.LABEL AS TOPIC_LABEL
+        FROM declarations d
+        LEFT JOIN cluster_results r ON d.DECL_ID = r.DECL_ID
+        LEFT JOIN topic_labels t ON r.HEADING = t.HEADING AND r.TOPIC = t.TOPIC
+        ORDER BY d.DTELDG, d.IMPDCLNUM
+    """).df()
 
 
 def export_topic_items_csv(con: duckdb.DuckDBPyConnection, heading: str, topic: int, out_path: str) -> int:

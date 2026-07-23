@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 import db
+import clustering_core
 from clustering_core import (
     DEFAULT_SAMPLE_CAP, MIN_UNIQUE_DOCS_FOR_BERTOPIC,
     compute_embeddings, fit_pca_2d, load_embedder, run_bertopic, save_heading_model,
@@ -31,7 +32,7 @@ def log(msg: str) -> None:
     print(f"[train] {msg}", flush=True)
 
 
-def train_heading(con, heading: str, embedder, args, params: dict) -> dict:
+def train_heading(con, heading: str, embedder, args, params: dict, models_dir=clustering_core.MODELS_DIR) -> dict:
     all_hashes, all_texts, all_embeddings = db.get_unique_embeddings_for_heading(con, heading)
     n_unique_total = len(all_hashes)
 
@@ -46,7 +47,7 @@ def train_heading(con, heading: str, embedder, args, params: dict) -> dict:
         )
         # model_obj=None หมายถึง heading นี้ไม่มีโมเดล BERTopic จริง — predict_new_item จะให้ทุกแถว
         # เป็น topic เดียว (0) แทน (ดู clustering_core.predict_new_item)
-        save_heading_model(heading, None, result["group_stats"], {**params, "skipped_reason": reason})
+        save_heading_model(heading, None, result["group_stats"], {**params, "skipped_reason": reason}, models_dir=models_dir)
         return result
 
     fit_hashes, fit_texts, fit_embeddings = all_hashes, all_texts, all_embeddings
@@ -86,7 +87,7 @@ def train_heading(con, heading: str, embedder, args, params: dict) -> dict:
         alert_below_ratio=args.alert_below_ratio, exclude_noise=False,
         sampled=sampled, n_unique_total=n_unique_total, skipped_reason=None,
     )
-    save_heading_model(heading, fitted_model, result["group_stats"], params, pca=pca, viz_df=viz_df)
+    save_heading_model(heading, fitted_model, result["group_stats"], params, pca=pca, viz_df=viz_df, models_dir=models_dir)
     return result
 
 

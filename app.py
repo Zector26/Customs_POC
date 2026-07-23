@@ -21,10 +21,10 @@ from clustering_core import (
 
 st.set_page_config(page_title="Customs BERTopic Clustering & Anomaly Detection", layout="wide")
 
-st.title("POC: จัดกลุ่มสินค้าด้วย BERTopic แยกตาม TRFCLS Heading + Anomaly Detection")
+st.title("POC: จัดกลุ่มสินค้าด้วย BERTopic แยกตามพิกัด TRFCLS + Anomaly Detection")
 st.caption(
     "แบ่งข้อมูลตาม TRFCLS 8 หลักแรก (AHTN) ก่อนด้วย exact-match แล้วรัน BERTopic แยกอิสระภายในแต่ละ "
-    "heading เพื่อจัดกลุ่มย่อยตามคำอธิบายสินค้า จากนั้นหาค่าเฉลี่ยมูลค่า CIF รวม (CIFVALTHB) ในแต่ละกลุ่มย่อย "
+    "พิกัด เพื่อจัดกลุ่มย่อยตามคำอธิบายสินค้า จากนั้นหาค่าเฉลี่ยมูลค่า CIF รวม (CIFVALTHB) ในแต่ละกลุ่มย่อย "
     "เพื่อ flag รายการที่มูลค่าต่ำผิดปกติ"
 )
 
@@ -37,7 +37,7 @@ def get_embedder():
     return load_embedder()
 
 
-@st.cache_resource(show_spinner="กำลังโหลดโมเดลของ heading นี้...")
+@st.cache_resource(show_spinner="กำลังโหลดโมเดลของพิกัดนี้...")
 def get_heading_model(heading: str, _embedder, cache_bust: float):
     return load_heading_model(heading, embedder=_embedder)
 
@@ -62,28 +62,28 @@ with tab_view:
     else:
         c1, c2, c3 = st.columns(3)
         c1.metric("จำนวนแถวทั้งหมด", f"{run_meta['N_ROWS']:,}")
-        c2.metric("จำนวน Heading", f"{run_meta['N_HEADINGS']:,}")
-        c3.metric("Anomaly ที่ flag ได้ (รวมทุก heading)", f"{run_meta['N_FLAGGED']:,}")
+        c2.metric("จำนวนพิกัด", f"{run_meta['N_HEADINGS']:,}")
+        c3.metric("Anomaly ที่ flag ได้ (รวมทุกพิกัด)", f"{run_meta['N_FLAGGED']:,}")
         with st.expander("พารามิเตอร์ตอนเทรน + เวลาที่เทรน"):
             st.json(run_meta["PARAMS_JSON"])
             st.caption(f"เทรนเมื่อ: {run_meta['TRAINED_AT']}")
 
         st.divider()
         headings_df = db.list_headings_with_results(con)
-        st.markdown("**สรุปผลต่อ Heading (TRFCLS 8 หลักแรก)**")
+        st.markdown("**สรุปผลต่อพิกัด (TRFCLS 8 หลักแรก)**")
         st.dataframe(headings_df, width="stretch", height=250)
 
         heading_options = headings_df["HEADING"].tolist()
         if heading_options:
-            view_heading = st.selectbox("เลือก Heading เพื่อดูรายละเอียด", heading_options)
+            view_heading = st.selectbox("เลือกพิกัดเพื่อดูรายละเอียด", heading_options)
             meta = db.get_heading_meta(con, view_heading)
 
             if meta["SKIPPED_REASON"]:
-                st.warning(f"Heading นี้ข้ามการรัน BERTopic: {meta['SKIPPED_REASON']}")
+                st.warning(f"พิกัดนี้ข้ามการรัน BERTopic: {meta['SKIPPED_REASON']}")
             if meta["SAMPLED"]:
-                st.warning("Heading นี้ fit BERTopic บนข้อความตัวอย่างเท่านั้น (ไม่ใช่ข้อความไม่ซ้ำทั้งหมด — จำนวนเกิน sample-cap)")
+                st.warning("พิกัดนี้ fit BERTopic บนข้อความตัวอย่างเท่านั้น (ไม่ใช่ข้อความไม่ซ้ำทั้งหมด — จำนวนเกิน sample-cap)")
 
-            st.markdown(f"**จำนวนสินค้าต่อ topic ภายใน heading `{view_heading}`**")
+            st.markdown(f"**จำนวนสินค้าต่อ topic ภายในพิกัด `{view_heading}`**")
             counts = db.query_topic_counts(con, view_heading)
             if len(counts):
                 fig_bar = px.bar(counts, x="TOPIC", y="COUNT", text="COUNT")
@@ -115,7 +115,7 @@ with tab_view:
                     width="stretch", height=300,
                 )
 
-                if st.button(f"⬇️ เตรียมไฟล์ดาวน์โหลด topic {view_topic} ของ heading นี้ (CSV)", key=f"dl_topic_{view_heading}_{view_topic}"):
+                if st.button(f"⬇️ เตรียมไฟล์ดาวน์โหลด topic {view_topic} ของพิกัดนี้ (CSV)", key=f"dl_topic_{view_heading}_{view_topic}"):
                     import tempfile
                     with st.spinner(f"กำลัง export {total_topic_items:,} rows..."):
                         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -137,7 +137,7 @@ with tab_view:
             alerts_page = db.query_alerts_page(con, view_heading, limit=ALERTS_PAGE_SIZE, offset=(page - 1) * ALERTS_PAGE_SIZE)
             st.dataframe(alerts_page, width="stretch", height=300)
 
-            if st.button("⬇️ เตรียมไฟล์ดาวน์โหลด Alert ของ heading นี้ (CSV)"):
+            if st.button("⬇️ เตรียมไฟล์ดาวน์โหลด Alert ของพิกัดนี้ (CSV)"):
                 import tempfile
                 with st.spinner(f"กำลัง export {total_alerts:,} rows..."):
                     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -166,7 +166,7 @@ with tab_test:
 
         heading = heading_from_trfcls(in_trfcls) if in_trfcls.strip() else None
         if heading:
-            st.caption(f"Heading (TRFCLS 8 หลักแรก) ที่จะใช้: `{heading}`")
+            st.caption(f"พิกัด (TRFCLS 8 หลักแรก) ที่จะใช้: `{heading}`")
 
         check_price = st.checkbox("ระบุมูลค่า CIF (CIFVALTHB) เพื่อตรวจ anomaly", value=True)
         in_cifvalthb = None
@@ -204,7 +204,7 @@ with tab_test:
                 st.warning("กรุณากรอก TRFCLS และคำอธิบายสินค้าอย่างน้อยภาษาใดภาษาหนึ่ง")
             elif heading not in trained_headings:
                 st.warning(
-                    f"ไม่พบ heading `{heading}` ในข้อมูลที่เทรนไว้ (heading ที่เทรนไว้มี: "
+                    f"ไม่พบพิกัด `{heading}` ในข้อมูลที่เทรนไว้ (พิกัดที่เทรนไว้มี: "
                     f"{', '.join(sorted(trained_headings)[:20])}{' ...' if len(trained_headings) > 20 else ''}) "
                     "— พิกัดศุลกากรนี้อาจไม่เคยเห็นตอนเทรน"
                 )
@@ -213,7 +213,7 @@ with tab_test:
                 meta_mtime = (Path("models") / heading / "meta.json").stat().st_mtime
                 model_obj, group_stats, train_params, pca, viz_df = get_heading_model(heading, embedder, meta_mtime)
 
-                st.caption(f"โมเดลของ heading `{heading}` เทรนไว้ด้วยพารามิเตอร์: {train_params} — พบ {len(group_stats)} topic ตอนเทรน")
+                st.caption(f"โมเดลของพิกัด `{heading}` เทรนไว้ด้วยพารามิเตอร์: {train_params} — พบ {len(group_stats)} topic ตอนเทรน")
 
                 prediction = predict_new_item(
                     model_obj, group_stats, embedder,
@@ -229,7 +229,7 @@ with tab_test:
                     )
                 else:
                     stats = prediction["group_stats"]
-                    st.success(f"จัดอยู่ใน **heading {heading} / topic {prediction['topic']}**")
+                    st.success(f"จัดอยู่ใน **พิกัด {heading} / topic {prediction['topic']}**")
                     if stats["sample_items"]:
                         st.caption("ตัวอย่างสินค้าในกลุ่มนี้ตอนเทรน: " + " / ".join(stats["sample_items"]))
 
@@ -290,6 +290,6 @@ with tab_test:
                     ))
                     st.plotly_chart(fig_compare, width="stretch")
                 elif viz_df is None:
-                    st.caption("Heading นี้ไม่มีกราฟเทียบ (ถูกข้าม BERTopic เพราะข้อมูลน้อยเกินไป — ทุกแถวถือเป็น topic เดียว)")
+                    st.caption("พิกัดนี้ไม่มีกราฟเทียบ (ถูกข้าม BERTopic เพราะข้อมูลน้อยเกินไป — ทุกแถวถือเป็น topic เดียว)")
 
 con.close()

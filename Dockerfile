@@ -1,5 +1,8 @@
-# Single-container image: ingest + เทรน BERTopic อัตโนมัติตอน container start ครั้งแรก (ถ้ายังไม่มีโมเดล)
-# แล้วเปิดเว็บแอป Streamlit ให้ดูผล/ทดสอบ — ดู startup.py สำหรับ logic การเช็ค/เทรน
+# อิมเมจเดียวใช้ 2 ขา (ประกาศ service แยกใน docker-compose.yml ผ่าน entrypoint/command override):
+#   1) ขา train — เว็บแอป Streamlit (app.py) ผ่าน startup.py: ingest + เทรน BERTopic อัตโนมัติตอน
+#      container start ครั้งแรก (ถ้ายังไม่มีโมเดล) แล้วเปิดเว็บให้ดูผล/ทดสอบ
+#   2) ขา test — เว็บแอป FastAPI (webapp/main.py): ทุกครั้งที่เปิด/รีเฟรชหน้าเว็บจะ ingest+จัดกลุ่ม+ตรวจ
+#      anomaly ใหม่จากไฟล์ทดสอบคงที่ (webapp/fixtures/) จำลองว่ามี transaction เข้ามา ไม่ต้องเทรนล่วงหน้า
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -32,9 +35,12 @@ RUN useradd -m -u 1000 appuser \
 USER appuser
 
 EXPOSE 8501
+EXPOSE 8800
 
 # start_period ยาวเป็นพิเศษ เพราะรอบแรกที่ยังไม่มีโมเดล container จะ ingest+เทรนก่อนเปิดเว็บแอป
-# (ข้อมูลระดับล้านแถวอาจใช้เวลาหลายนาที) — ปรับเพิ่มได้ถ้าข้อมูลเริ่มต้นใหญ่กว่านี้มาก
+# (ข้อมูลระดับล้านแถวอาจใช้เวลาหลายนาที) — ปรับเพิ่มได้ถ้าข้อมูลเริ่มต้นใหญ่กว่านี้มาก ค่านี้ใช้กับขา
+# train (service "app") เป็นค่าเริ่มต้นของอิมเมจ — ขา test (service "webapp") override HEALTHCHECK เอง
+# ใน docker-compose.yml เพราะ endpoint/พอร์ตต่างกัน
 HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')" || exit 1
 

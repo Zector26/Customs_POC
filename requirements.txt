@@ -8,3 +8,6 @@ plotly
 joblib
 duckdb
 openpyxl
+fastapi
+uvicorn
+jinja2

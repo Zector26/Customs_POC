@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ระบบแสดงผลการจัดกลุ่มและตรวจสอบราคาใบขนสินค้าขาเข้า (Demo)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="seal">ศก</div>
+    <div class="brand-txt">
+      <h1>ระบบจัดกลุ่มสินค้าด้วย BERTopic + ตรวจสอบราคาผิดปกติ</h1>
+      <span class="sub">ใบขนสินค้าขาเข้า · ประมวลผลจากไฟล์ทดสอบ (test file) — Demo / localhost เท่านั้น</span>
+    </div>
+  </div>
+  <div class="topright">
+    <div class="clock" id="clock"></div>
+  </div>
+</header>
+
+<div class="runinfo">
+  จำลองรับใบขนสินค้าขาเข้าเข้าระบบ <b>{{ run.n_rows }}</b> รายการ จากไฟล์ทดสอบ · ตรงกับโมเดลที่ขา train เทรนไว้แล้ว
+  <b>{{ run.n_headings_matched }}</b>/{{ run.n_headings_seen }} พิกัด
+  {% if run.n_no_reference %}· <b>{{ run.n_no_reference }}</b> รายการไม่มีข้อมูลอ้างอิง (พิกัดยังไม่เคยเทรน){% endif %} ·
+  ประมวลผลใหม่ทุกครั้งที่เปิดหน้านี้ (จำลองว่ามีชุด transaction เข้ามาให้ระบบตรวจ — พยากรณ์เทียบกับโมเดลขา train ไม่ได้เทรนเอง)
+</div>
+
+<div class="kpis">
+  <div class="kpi" data-f="all"><div class="kpi-n">{{ stats.total }}</div><div class="kpi-l">รายการทั้งหมด</div><div class="kpi-x">ใบขนสินค้าขาเข้า</div></div>
+  <div class="kpi red" data-f="red"><div class="kpi-n">{{ stats.red }}</div><div class="kpi-l">Undervalue</div><div class="kpi-x">สำแดงราคาต่ำผิดปกติ</div></div>
+  <div class="kpi green" data-f="green"><div class="kpi-n">{{ stats.green }}</div><div class="kpi-l">Not Undervalue</div><div class="kpi-x">ไม่พบความผิดปกติ</div></div>
+  <div class="kpi unknown" data-f="unknown"><div class="kpi-n">{{ stats.unknown }}</div><div class="kpi-l">Unknown</div><div class="kpi-x">ไม่มีข้อมูลอ้างอิง</div></div>
+</div>
+
+<div class="toolbar">
+  <div class="filters">
+    <div class="seg" id="seg-status">
+      <button data-v="all" class="on">ทั้งหมด</button>
+      <button data-v="red">Undervalue</button>
+      <button data-v="green">Not Undervalue</button>
+      <button data-v="unknown">Unknown</button>
+    </div>
+  </div>
+  <input id="q" class="search" type="search" placeholder="ค้นหา เลขที่ใบขนสินค้า / ผู้นำเข้า / พิกัดศุลกากร / ถิ่นกำเนิด">
+  <span class="count" id="count"></span>
+</div>
+
+<div class="tablewrap">
+<table class="grid">
+<thead>
+<tr>
+  <th>เลขที่ใบขนสินค้า</th><th>วันที่ผ่านพิธีการ</th><th>ประเภท</th><th class="l">ผู้นำเข้า</th>
+  <th>พิกัดศุลกากร</th><th>ถิ่นกำเนิด</th><th class="r">น้ำหนัก</th><th class="r">มูลค่า CIF (บาท)</th>
+  <th class="l">ผลการจัดกลุ่ม</th><th>สถานะ</th>
+</tr>
+</thead>
+<tbody id="rows">
+{% for r in rows %}
+<tr class="row ch-{{ r.status }}" data-ref="{{ r.decl_id }}"
+    data-status="{{ r.status }}"
+    data-s="{{ r.decl_no }} {{ r.importer }} {{ r.importer_eng }} {{ r.trfcls }} {{ r.origin }}">
+  <td class="mono">{{ r.decl_no }}</td>
+  <td class="mono dim">{{ r.date_disp }}</td>
+  <td><span class="kind import">ขาเข้า</span></td>
+  <td class="l"><div class="tname">{{ r.importer }}</div><div class="tprofile">{{ r.importer_eng }}</div></td>
+  <td class="mono">{{ r.trfcls }}</td>
+  <td>{{ r.origin }}</td>
+  <td class="r mono">{{ r.weight }}</td>
+  <td class="r mono">{{ r.cif }}</td>
+  <td class="l"><div class="tprofile">{{ r.topic_label }}</div></td>
+  <td><span class="status {{ r.status }}">
+    {% if r.status == 'red' %}Undervalue{% elif r.status == 'green' %}Not Undervalue{% else %}Unknown{% endif %}
+  </span></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+
+<div class="drawer-bg" id="drawerbg"></div>
+<aside class="drawer" id="drawer"><div class="drawer-body" id="drawerbody"></div></aside>
+
+<footer class="foot">ข้อมูลในระบบนี้เป็นข้อมูลจำลองเพื่อการสาธิต (test file) · ไม่มีการเชื่อมต่อ LLM ใด ๆ · รันบน localhost เท่านั้น</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

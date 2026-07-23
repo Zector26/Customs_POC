@@ -6,6 +6,12 @@
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "streamlit", "run", "app.py", "--server.headless", "true", "--server.fileWatcherType", "none", "--server.port", "8503"],
       "port": 8503
+    },
+    {
+      "name": "bertopic-test-webapp",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-X", "utf8", "-m", "uvicorn", "webapp.main:app", "--port", "8800"],
+      "port": 8800
     }
   ]
 }

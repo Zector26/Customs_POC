@@ -10,3 +10,7 @@ models/
 *.xlsx
 .pytest_cache/
 *.duckdb
+
+# ยกเว้นไฟล์ทดสอบจำลอง (ขา test ที่รันตอนเปิดเว็บ webapp/main.py) — ต้องอยู่ใน image จริง ไม่ใช่ข้อมูล
+# จริงที่ผ่าน volume มา ต่างจาก data/*.xlsx (ข้อมูลจริง/โมเดลที่เทรนแล้ว ซึ่งไม่ควร bake เข้า image)
+!webapp/fixtures/*.xlsx

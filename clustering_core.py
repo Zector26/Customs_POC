@@ -14,6 +14,7 @@ import joblib
 from sentence_transformers import SentenceTransformer
 from bertopic import BERTopic
 from hdbscan import HDBSCAN
+from umap import UMAP
 
 # multilingual-e5-large (~560M params, ~2.2GB) — คุณภาพ embedding ดีกว่า -small (118M) แต่ช้ากว่าบน CPU
 # ~5-6x — ต้องโหลด cache model ลง customs-hf-cache volume ล่วงหน้าก่อนถ้าเครื่อง production ออกเน็ตไม่ได้
@@ -87,8 +88,18 @@ def run_bertopic(
         cluster_selection_method="eom",
         prediction_data=True,
     )
+    # UMAP default (n_neighbors=15, n_components=5) พัง (spectral init ต้องการ n_neighbors < n_samples)
+    # เมื่อ heading มีข้อความไม่ซ้ำน้อย (พบได้จริงตอน heading เล็ก ไม่ใช่แค่ตอน sample เดโม) — clamp ตาม
+    # จำนวนเอกสารจริง ค่า default เดิมของ BERTopic ยังคงเหมือนเดิมทุกกรณีที่ข้อมูลมากพอ (>=16 เอกสาร)
+    n_docs = len(texts)
+    umap_model = UMAP(
+        n_neighbors=min(15, max(2, n_docs - 1)),
+        n_components=min(5, max(2, n_docs - 2)),
+        min_dist=0.0, metric="cosine", random_state=42,
+    )
     topic_model = BERTopic(
         embedding_model=embedder,
+        umap_model=umap_model,
         hdbscan_model=hdbscan_model,
         nr_topics=nr_topics,
         min_topic_size=min_topic_size,
@@ -119,14 +130,20 @@ def compute_cluster_circles(viz_df: pd.DataFrame, cluster_col: str = "TOPIC") ->
 # บันทึก / โหลดโมเดลต่อ heading + ทำนายข้อมูลใหม่ที่กรอกเข้ามาเอง
 # =========================================================
 
-def _heading_dir(heading: str) -> Path:
-    return MODELS_DIR / heading
+def _heading_dir(heading: str, models_dir: Path = MODELS_DIR) -> Path:
+    return models_dir / heading
 
 
-def save_heading_model(heading: str, model_obj: BERTopic | None, group_stats: dict, params: dict, pca=None, viz_df: pd.DataFrame = None) -> Path:
+def save_heading_model(
+    heading: str, model_obj: BERTopic | None, group_stats: dict, params: dict, pca=None,
+    viz_df: pd.DataFrame = None, models_dir: Path = MODELS_DIR,
+) -> Path:
     """model_obj=None หมายถึง heading นี้ถูกข้ามการรัน BERTopic จริง (ข้อมูลน้อยเกินไป — ดู
-    MIN_UNIQUE_DOCS_FOR_BERTOPIC) ทุกแถวถือเป็น topic เดียว (0) ไม่มีไฟล์โมเดลให้บันทึก"""
-    target_dir = _heading_dir(heading)
+    MIN_UNIQUE_DOCS_FOR_BERTOPIC) ทุกแถวถือเป็น topic เดียว (0) ไม่มีไฟล์โมเดลให้บันทึก
+
+    models_dir: แยกที่เก็บโมเดลได้ (ค่าเริ่มต้น MODELS_DIR ของโปรดักชัน) — ใช้เวลารันไฟล์ทดสอบ/สาธิต
+    เพื่อไม่ให้โมเดลจำลองไปปนกับโมเดลที่เทรนจริงบนข้อมูลจริง"""
+    target_dir = _heading_dir(heading, models_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if model_obj is not None:
@@ -144,20 +161,20 @@ def save_heading_model(heading: str, model_obj: BERTopic | None, group_stats: di
     return target_dir
 
 
-def heading_model_exists(heading: str) -> bool:
-    return (_heading_dir(heading) / "meta.json").exists()
+def heading_model_exists(heading: str, models_dir: Path = MODELS_DIR) -> bool:
+    return (_heading_dir(heading, models_dir) / "meta.json").exists()
 
 
-def list_trained_headings() -> list[str]:
-    if not MODELS_DIR.exists():
+def list_trained_headings(models_dir: Path = MODELS_DIR) -> list[str]:
+    if not models_dir.exists():
         return []
-    return sorted(d.name for d in MODELS_DIR.iterdir() if d.is_dir() and (d / "meta.json").exists())
+    return sorted(d.name for d in models_dir.iterdir() if d.is_dir() and (d / "meta.json").exists())
 
 
-def load_heading_model(heading: str, embedder: SentenceTransformer):
+def load_heading_model(heading: str, embedder: SentenceTransformer, models_dir: Path = MODELS_DIR):
     """โหลดโมเดลที่บันทึกไว้ของ heading นี้ คืนค่า (model_obj, group_stats, params, pca, viz_df)
     model_obj จะเป็น None ถ้า heading นี้ถูกข้ามตอนเทรน (ข้อมูลน้อยเกินไป — ดู params['skipped_reason'])"""
-    target_dir = _heading_dir(heading)
+    target_dir = _heading_dir(heading, models_dir)
     with open(target_dir / "meta.json", encoding="utf-8") as f:
         meta = json.load(f)
 
