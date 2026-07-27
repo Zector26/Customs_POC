@@ -10,3 +10,5 @@ seed_data/*.xlsx
 !seed_data/.gitkeep
 .pytest_cache/
 *.tar.gz
+webapp/fixtures/*.csv
+webapp/fixtures/*.xlsx
