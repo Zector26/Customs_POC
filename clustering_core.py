@@ -10,8 +10,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import joblib
 from sentence_transformers import SentenceTransformer
+from pythainlp.tokenize import word_tokenize
 from bertopic import BERTopic
 from hdbscan import HDBSCAN
 from umap import UMAP
@@ -31,6 +34,17 @@ DEFAULT_SAMPLE_CAP = 100_000
 # heading ที่มีข้อความไม่ซ้ำน้อยกว่านี้ ข้ามการรัน BERTopic (ข้อมูลน้อยเกินจะ fit ไม่ได้ความหมาย) —
 # ให้ทุกแถวใน heading นั้นเป็น topic เดียว (topic=0) แทน
 MIN_UNIQUE_DOCS_FOR_BERTOPIC = 5
+
+# กลยุทธ์/threshold สำหรับ BERTopic.reduce_outliers — ใช้ค่าเดียวกันทั้งตอนเทรน (จัดกลุ่มเอกสาร noise
+# เข้ากับ topic ที่ใกล้ที่สุดก่อนคำนวณ group_stats) และตอน predict สินค้าใหม่ (fallback เมื่อโมเดลตัดสิน
+# เป็น -1) ไม่งั้นเกณฑ์ "นับว่าอยู่ในกลุ่ม" จะไม่ตรงกันระหว่างสองจุด — threshold คือ cosine similarity
+# ขั้นต่ำที่ยอมรับ ตั้งไว้ที่ 0.90 (ไม่ใช่ 0 ตาม default ของ BERTopic) จากการวัดจริงบนข้อมูล production:
+# e5-large บนข้อความสั้นแบบ catalog สินค้านี้ ช่วง similarity ที่มีความหมายอยู่แถว 0.85-0.96 ทั้งหมด
+# (ไม่ใช่ 0-1 กว้างๆ) — เอกสารที่ไม่เกี่ยวกันเลยจริงๆยังวัดได้ ~0.85-0.89 (baseline สูงจาก anisotropy)
+# ทับซ้อนกับเอกสารที่เกี่ยวข้องจริง (~0.886-0.96) เกือบหมด ตั้งสูงกว่าขอบล่างของช่วง "เกี่ยวข้องจริง" ไว้
+# กันไม่ให้ noise เกือบทุกตัวถูกจัดกลุ่มไปหมดแบบไม่เลือก
+REDUCE_OUTLIERS_STRATEGY = "embeddings"
+REDUCE_OUTLIERS_THRESHOLD = 0.90
 
 
 def heading_from_trfcls(trfcls) -> str:
@@ -54,6 +68,16 @@ def build_text_for_embedding(gdsdscth: str, gdsdsc: str) -> str:
 
 def load_embedder(model_name: str = EMBEDDING_MODEL_NAME) -> SentenceTransformer:
     return SentenceTransformer(model_name)
+
+
+# CountVectorizer default tokenizer (regex \w\w+) ตัดคำตามช่องว่าง/ตัวอักษรพิเศษ ใช้ไม่ได้กับภาษาไทยที่
+# เขียนติดกันไม่เว้นวรรค — ต้องตัดคำด้วย pythainlp เอง ไม่งั้น c-TF-IDF (ใช้ทำ topic keyword/Representation
+# เท่านั้น ไม่กระทบการจัดกลุ่มซึ่งใช้ embedding) จะได้เศษคำไทยที่ตัดผิดจุดสระ/วรรณยุกต์ ไม่ใช่คำจริง
+_TOKEN_HAS_ALNUM_RE = re.compile(r"[^\W_]", re.UNICODE)
+
+
+def _thai_english_tokenizer(text: str) -> list[str]:
+    return [t for t in word_tokenize(text, engine="newmm") if _TOKEN_HAS_ALNUM_RE.search(t)]
 
 
 def compute_embeddings(embedder: SentenceTransformer, texts: list[str], batch_size: int = 256, progress_cb=None) -> np.ndarray:
@@ -97,17 +121,56 @@ def run_bertopic(
         n_components=min(5, max(2, n_docs - 2)),
         min_dist=0.0, metric="cosine", random_state=42,
     )
+    vectorizer_model = CountVectorizer(tokenizer=_thai_english_tokenizer, token_pattern=None)
     topic_model = BERTopic(
         embedding_model=embedder,
         umap_model=umap_model,
         hdbscan_model=hdbscan_model,
+        vectorizer_model=vectorizer_model,
         nr_topics=nr_topics,
         min_topic_size=min_topic_size,
         calculate_probabilities=False,
         verbose=False,
     )
     labels, _ = topic_model.fit_transform(texts, embeddings=embeddings)
-    return np.array(labels), topic_model
+
+    # จัดเอกสาร noise (-1) เข้ากับ topic ที่ใกล้ที่สุด (ถ้าเกิน threshold) แทนที่จะปล่อยให้เป็นกลุ่ม "noise"
+    # ของตัวเอง ซึ่งไม่มีความหมายเพราะเอกสารใน noise ไม่ได้เกี่ยวข้องกันจริง — ต้องเรียก update_topics ตาม
+    # ไม่งั้น keyword/representative docs ของแต่ละ topic (build_topic_descriptions) จะไม่ตรงกับ label ใหม่
+    if -1 in labels:
+        labels = topic_model.reduce_outliers(
+            texts, list(labels), strategy=REDUCE_OUTLIERS_STRATEGY, embeddings=embeddings,
+            threshold=REDUCE_OUTLIERS_THRESHOLD,
+        )
+        topic_model.update_topics(texts, topics=labels)
+
+    labels = np.array(labels)
+    # centroid เฉลี่ยของ embedding ต่อ topic จริง (ไม่รวม -1) — คำนวณเองแทนการพึ่ง model.topic_embeddings_
+    # เพราะพบว่า update_topics(topics=...) ข้างบน "ไม่" รีเฟรช topic_embeddings_ จริง (bug/quirk ของ
+    # BERTopic 0.17.4 — เงื่อนไขเช็คก่อน rebuild เทียบ self.topics_ กับ topics ที่ _update_topic_size ซึ่ง
+    # ถูกเรียกไปแล้วเซ็ต self.topics_ ให้เท่ากับ topics พอดี เงื่อนไขเลยเป็นเท็จเสมอ) ทำให้ topic_embeddings_
+    # ค้างค่าจากตอน fit ครั้งแรก (ยังมีแถว -1 เดิมติดอยู่) ไม่ตรงกับ model._outliers ที่อ่านสดจาก
+    # topic_sizes_ (กลายเป็น 0 หลัง reduce) — ผลคือ index เพี้ยนไปหนึ่งแถว ใช้ต่อไม่ได้เลย ต้องคำนวณเองใช้
+    # ตอน predict (ดู predict_new_item / _reassign_via_centroids)
+    topic_centroids = {
+        int(topic_id): embeddings[labels == topic_id].mean(axis=0)
+        for topic_id in set(labels.tolist()) if topic_id != -1
+    }
+
+    return labels, topic_model, topic_centroids
+
+
+def build_topic_descriptions(model_obj: BERTopic) -> dict:
+    """ดึง Name (คำสำคัญ top words) + Representative_Docs (ข้อความตัวแทน 3 อัน) ต่อ topic จากโมเดลที่ fit
+    แล้ว — ใช้เก็บลง DB (ดู db.save_topic_labels) เพื่อแสดงบนเว็บโดยไม่ต้องโหลดโมเดล BERTopic ทั้งตัวมาดูซ้ำ"""
+    info = model_obj.get_topic_info()
+    return {
+        int(row.Topic): {
+            "label": row.Name,
+            "repr_docs": model_obj.get_representative_docs(int(row.Topic)) or [],
+        }
+        for row in info.itertuples()
+    }
 
 
 def fit_pca_2d(embeddings: np.ndarray):
@@ -190,6 +253,24 @@ def load_heading_model(heading: str, embedder: SentenceTransformer, models_dir: 
     return model_obj, meta["group_stats"], meta["params"], pca, viz_df
 
 
+def _reassign_via_centroids(group_stats: dict, embedding: np.ndarray, threshold: float) -> int:
+    """คำนวณ cosine similarity ระหว่าง embedding ของสินค้าใหม่ (ที่ transform() ตัดสินเป็น -1) กับ centroid
+    ของทุก topic จริงที่เก็บไว้ใน group_stats[topic]["centroid"] (คำนวณไว้ตั้งแต่ตอนเทรน — ดู run_bertopic)
+    คืน topic ที่ similarity สูงสุดถ้าผ่าน threshold มิฉะนั้นคง -1 ไว้
+
+    ตั้งใจไม่ใช้ model_obj.topic_embeddings_/model_obj.reduce_outliers() ตรงๆ เพราะพบว่า topic_embeddings_
+    ค้างค่าเก่าจากตอน fit ครั้งแรก (ยังมีแถวของ -1 เดิม) หลังจากเรียก update_topics(topics=...) ไปแล้วในตอน
+    เทรน (bug/quirk ของ BERTopic 0.17.4 ดูคอมเมนต์ใน run_bertopic) ทำให้ index ของแถวไม่ตรงกับ topic id จริง
+    — ตรวจพบจริงตอนทดสอบ: ข้อความที่ไม่เกี่ยวข้องเลยถูกจับคู่เป็น topic ที่ไม่มีอยู่จริงใน group_stats"""
+    topic_ids = sorted(int(tid) for tid, stats in group_stats.items() if stats.get("centroid") is not None)
+    if not topic_ids:
+        return -1
+    centroids = np.array([group_stats[str(tid)]["centroid"] for tid in topic_ids])
+    similarities = cosine_similarity(embedding, centroids)[0]
+    best_idx = int(np.argmax(similarities))
+    return topic_ids[best_idx] if similarities[best_idx] >= threshold else -1
+
+
 def predict_new_item(
     model_obj: BERTopic | None,
     group_stats: dict,
@@ -217,6 +298,8 @@ def predict_new_item(
     else:
         topics, _probs = model_obj.transform([text], embeddings=embedding)
         topic = int(topics[0])
+        if topic == -1:
+            topic = _reassign_via_centroids(group_stats, embedding, REDUCE_OUTLIERS_THRESHOLD)
 
     stats = group_stats.get(str(topic))
     result = {"topic": topic, "group_stats": stats, "is_noise": topic == -1, "coords_2d": None}

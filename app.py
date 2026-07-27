@@ -90,13 +90,25 @@ with tab_view:
                 st.plotly_chart(fig_bar, width="stretch")
 
                 st.markdown("**ดูรายการสินค้าในแต่ละ topic**")
+                topic_desc = db.get_topic_descriptions_for_heading(con, view_heading)
                 topic_options = counts.sort_values("COUNT", ascending=False)["TOPIC"].tolist()
+
+                def _format_topic_option(t):
+                    count = counts.loc[counts["TOPIC"] == t, "COUNT"].iloc[0]
+                    label = topic_desc.get(int(t), {}).get("label")
+                    text = f"topic {t} — {label} ({count:,} รายการ)" if label else f"topic {t} ({count:,} รายการ)"
+                    return text + (" — noise/ไม่เข้ากลุ่มไหน" if t == -1 else "")
+
                 view_topic = st.selectbox(
-                    "เลือก topic", topic_options,
-                    format_func=lambda t: f"topic {t} ({counts.loc[counts['TOPIC'] == t, 'COUNT'].iloc[0]:,} รายการ)"
-                    + (" — noise/ไม่เข้ากลุ่มไหน" if t == -1 else ""),
+                    "เลือก topic", topic_options, format_func=_format_topic_option,
                     key=f"topic_select_{view_heading}",
                 )
+                repr_docs = topic_desc.get(int(view_topic), {}).get("repr_docs", [])
+                if repr_docs:
+                    st.caption("ตัวอย่างข้อความตัวแทน topic นี้:")
+                    for doc in repr_docs:
+                        st.caption(f"- {doc}")
+
                 total_topic_items = db.count_topic_items(con, view_heading, int(view_topic))
                 n_topic_pages = max(1, -(-total_topic_items // TOPIC_ITEMS_PAGE_SIZE))
                 topic_page = st.number_input(

@@ -73,8 +73,10 @@ def _isna(v) -> bool:
 
 
 def _row_view(r: dict) -> dict:
-    """r: แถวจาก pipeline.run() — ALERT_STATUS เป็น 'undervalue' / 'overvalue' / 'normal' / None (ไม่มี
-    ข้อมูลอ้างอิงให้ตัดสิน เพราะ heading นี้ไม่เคยเทรน หรือถูกจัดเป็น noise/กลุ่มที่ไม่มีสถิติราคา)"""
+    """r: แถวจาก pipeline.run() — ALERT_STATUS เป็น 'undervalue' / 'overvalue' / 'normal' / None
+    ถ้าเป็น None แยกสาเหตุตาม NO_REF_REASON ต่ออีกที: 'no_model' = พิกัดนี้ยังไม่มีในข้อมูลที่ขา train
+    เคยเทรนเลย, 'new_cluster' = เทรนแล้ว แต่รายการนี้ไม่เข้ากลุ่มใดที่มีสถิติราคาอ้างอิง (noise/กลุ่มใหม่
+    ที่ยังไม่เคยเห็นตอนเทรน)"""
     alert_status = r["ALERT_STATUS"]
     if alert_status == "undervalue":
         status, status_label = "red", "สำแดงราคาต่ำผิดปกติ (Undervalue)"
@@ -82,8 +84,10 @@ def _row_view(r: dict) -> dict:
         status, status_label = "orange", "สำแดงราคาสูงผิดปกติ (Overvalue)"
     elif alert_status == "normal":
         status, status_label = "green", "ไม่พบความผิดปกติ (Normal)"
+    elif r["NO_REF_REASON"] == "new_cluster":
+        status, status_label = "new_cluster", "เทรนแล้ว พบ Cluster ใหม่ (New Cluster)"
     else:
-        status, status_label = "unknown", "ไม่มีข้อมูลอ้างอิง (Unknown)"
+        status, status_label = "no_model", "ยังไม่มีพิกัดนี้ในข้อมูล Train (No Model)"
     return {
         "decl_id": r["DECL_ID"],
         "decl_no": f"{r['POTLDG']}-{r['IMPDCLNUM']}",
@@ -94,7 +98,6 @@ def _row_view(r: dict) -> dict:
         "origin": r["CTYOGN"] or "-",
         "weight": f"{r['WGT']:,.1f} {r['WGTUNT']}" if not _isna(r["WGT"]) else "-",
         "cif": _money(r["CIFVALTHB"]),
-        "topic": r["TOPIC"],
         "heading": r["HEADING"],
         "status": status,
         "status_label": status_label,

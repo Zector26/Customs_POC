@@ -146,6 +146,9 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
             PRIMARY KEY (HEADING, TOPIC)
         )
     """)
+    # REPR_DOCS = ตัวอย่างข้อความจริง 3 อันที่เป็นตัวแทน topic นั้น (BERTopic representative_docs_) เก็บเป็น
+    # JSON array ของ string — เพิ่มทีหลัง ต้อง ALTER แบบ idempotent เหมือนคอลัมน์อื่น ๆ ในไฟล์นี้
+    con.execute("ALTER TABLE topic_labels ADD COLUMN IF NOT EXISTS REPR_DOCS VARCHAR")
     con.execute("""
         CREATE TABLE IF NOT EXISTS weight_unit_conversion (
             WGTUNT VARCHAR PRIMARY KEY,
@@ -637,17 +640,32 @@ def query_topic_items_page(
     """, [heading, topic, limit, offset]).df()
 
 
-def save_topic_labels(con: duckdb.DuckDBPyConnection, heading: str, labels: dict[int, str]) -> None:
-    """เก็บป้ายชื่อ (คำสำคัญ top words จาก BERTopic) ต่อ topic ของ heading นี้ — ใช้แสดงผล 'ผลการจัดกลุ่ม'
-    ให้อ่านง่ายกว่าเลข topic ดิบ ๆ บนเว็บ"""
+def save_topic_labels(con: duckdb.DuckDBPyConnection, heading: str, descriptions: dict[int, dict]) -> None:
+    """เก็บคำอธิบายต่อ topic ของ heading นี้ — ใช้แสดงผล 'ผลการจัดกลุ่ม' ให้อ่านง่ายกว่าเลข topic ดิบ ๆ บนเว็บ
+
+    descriptions: {topic_id: {"label": ชื่อ topic (BERTopic Name), "repr_docs": list ข้อความตัวแทน 3 อัน}}
+    (ดู clustering_core.build_topic_descriptions)"""
     con.execute("DELETE FROM topic_labels WHERE HEADING = ?", [heading])
-    for topic_id, label in labels.items():
-        con.execute("INSERT INTO topic_labels VALUES (?, ?, ?)", [heading, int(topic_id), label])
+    for topic_id, info in descriptions.items():
+        con.execute(
+            "INSERT INTO topic_labels VALUES (?, ?, ?, ?)",
+            [heading, int(topic_id), info.get("label"), json.dumps(info.get("repr_docs", []), ensure_ascii=False)],
+        )
 
 
 def get_topic_labels_map(con: duckdb.DuckDBPyConnection) -> dict[tuple[str, int], str]:
     rows = con.execute("SELECT HEADING, TOPIC, LABEL FROM topic_labels").fetchall()
     return {(heading, int(topic)): label for heading, topic, label in rows}
+
+
+def get_topic_descriptions_for_heading(con: duckdb.DuckDBPyConnection, heading: str) -> dict[int, dict]:
+    rows = con.execute(
+        "SELECT TOPIC, LABEL, REPR_DOCS FROM topic_labels WHERE HEADING = ?", [heading]
+    ).fetchall()
+    return {
+        int(topic): {"label": label, "repr_docs": json.loads(repr_docs) if repr_docs else []}
+        for topic, label, repr_docs in rows
+    }
 
 
 def query_full_results(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:

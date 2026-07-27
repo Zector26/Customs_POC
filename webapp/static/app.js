@@ -59,17 +59,18 @@ document.getElementById('rows').addEventListener('click',e=>{
 });
 
 // ไล่ประมวลผลทีละ transaction (auto-play) — จำลองว่า transaction เข้ามาให้ระบบตรวจทีละใบ
-const STATUS_LABEL={red:'Undervalue',orange:'Overvalue',green:'Normal',unknown:'Unknown'};
+const STATUS_LABEL={red:'Undervalue',orange:'Overvalue',green:'Normal',no_model:'No Model',new_cluster:'New Cluster'};
 const GUARD_MSG={
   red:'🚩 สงสัยว่าสำแดงราคาต่ำผิดปกติ',
   orange:'🔶 สงสัยว่าสำแดงราคาสูงผิดปกติ',
   green:'✓ ไม่พบความผิดปกติ',
-  unknown:'⚪ ไม่มีข้อมูลอ้างอิงให้ตัดสิน',
+  no_model:'⚪ ยังไม่มีพิกัดนี้ในข้อมูล train',
+  new_cluster:'🔵 train แล้ว แต่เจอ cluster ใหม่',
 };
 const PROCESS_MS=650, GAP_MS=250;
 const ROWS=JSON.parse(document.getElementById('rows-data').textContent);
 const rowsBody=document.getElementById('rows');
-const counts={red:0,orange:0,green:0,unknown:0};
+const counts={red:0,orange:0,green:0,no_model:0,new_cluster:0};
 let idx=0, skipped=false;
 
 function sleep(ms){return new Promise(res=>setTimeout(res,ms));}
@@ -82,7 +83,6 @@ function rowHtml(r){
     <td><span class="kind import">ขาเข้า</span></td>
     <td class="l"><div class="tname">${r.importer}</div><div class="tprofile">${r.importer_eng}</div></td>
     <td class="mono">${r.trfcls}</td>
-    <td class="mono">${r.topic ?? '-'}</td>
     <td class="r mono">${r.price_per_kg}</td>
     <td class="r mono">${r.group_mean_kg ?? '-'}</td>
     <td class="l"><div class="tprofile">${r.gdsdscth}</div></td>

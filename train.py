@@ -47,6 +47,7 @@ def train_heading(con, heading: str, embedder, args, params: dict, models_dir=cl
         # model_obj=None หมายถึง heading นี้ไม่มีโมเดล BERTopic จริง — predict_new_item จะให้ทุกแถว
         # เป็น topic เดียว (0) แทน (ดู clustering_core.predict_new_item)
         save_heading_model(heading, None, result["group_stats"], {**params, "skipped_reason": reason}, models_dir=models_dir)
+        db.save_topic_labels(con, heading, {0: {"label": "(ข้อมูลน้อยเกินไป ไม่ได้แบ่งกลุ่ม)", "repr_docs": []}})
         return result
 
     fit_hashes, fit_texts, fit_embeddings = all_hashes, all_texts, all_embeddings
@@ -69,7 +70,7 @@ def train_heading(con, heading: str, embedder, args, params: dict, models_dir=cl
         nr_topics = "auto"
     else:
         nr_topics = int(args.nr_topics)
-    labels, fitted_model = run_bertopic(
+    labels, fitted_model, topic_centroids = run_bertopic(
         fit_texts, fit_embeddings, embedder, nr_topics=nr_topics, min_topic_size=args.min_topic_size,
         min_samples=args.min_samples,
     )
@@ -85,7 +86,14 @@ def train_heading(con, heading: str, embedder, args, params: dict, models_dir=cl
         con, heading, hash_to_topic, alert_ratio=args.alert_ratio, exclude_noise=False,
         sampled=sampled, n_unique_total=n_unique_total, skipped_reason=None,
     )
+    # ผนวก centroid ต่อ topic เข้า group_stats ไว้ใช้ตอน predict สินค้าใหม่ที่ transform() ได้ -1 (ดู
+    # clustering_core._reassign_via_centroids) — เก็บเป็น list เพราะ JSON ไม่มี ndarray
+    for topic_id, centroid in topic_centroids.items():
+        stats = result["group_stats"].get(str(topic_id))
+        if stats is not None:
+            stats["centroid"] = centroid.tolist()
     save_heading_model(heading, fitted_model, result["group_stats"], params, pca=pca, viz_df=viz_df, models_dir=models_dir)
+    db.save_topic_labels(con, heading, clustering_core.build_topic_descriptions(fitted_model))
     return result
 
 

@@ -59,7 +59,8 @@ def run(xlsx_path: str = TEST_XLSX_PATH, db_path: str = TEST_DB_PATH, embedder=N
     model_cache: dict[str, tuple | None] = {}
     rows = []
     n_flagged = 0
-    n_no_reference = 0
+    n_no_model = 0
+    n_new_cluster = 0
     headings_matched = set()
 
     for _, d in declarations.iterrows():
@@ -78,12 +79,13 @@ def run(xlsx_path: str = TEST_XLSX_PATH, db_path: str = TEST_DB_PATH, embedder=N
         wgt_kg = float(wgt_kg_raw) if pd.notna(wgt_kg_raw) else None
 
         if cached is None:
-            row.update(TOPIC=None,
+            # พิกัด (heading) นี้ไม่มีโมเดลที่เทรนไว้เลย — ยังไม่เคยเทรน หรือเทรนจากข้อมูลที่ไม่มี heading นี้
+            row.update(TOPIC=None, NO_REF_REASON="no_model",
                        ALERT_STATUS=None, ALERT_METRIC=None, GROUP_MEAN_CIFVALTHB=None,
                        ALERT_THRESHOLD_LOW_CIFVALTHB=None, ALERT_THRESHOLD_HIGH_CIFVALTHB=None,
                        GROUP_MEAN_PRICE_PER_KG=None, ALERT_THRESHOLD_LOW_PRICE_PER_KG=None,
                        ALERT_THRESHOLD_HIGH_PRICE_PER_KG=None)
-            n_no_reference += 1
+            n_no_model += 1
         else:
             model_obj, group_stats = cached
             headings_matched.add(heading)
@@ -93,12 +95,14 @@ def run(xlsx_path: str = TEST_XLSX_PATH, db_path: str = TEST_DB_PATH, embedder=N
             )
             stats = pred.get("group_stats")
             if stats is None:
-                row.update(TOPIC=pred["topic"],
+                # heading นี้เทรนไว้แล้ว แต่รายการนี้ไม่เข้ากลุ่มใดที่มีสถิติราคาอ้างอิง (noise หรือ topic
+                # ที่ยังไม่เคยเห็นตอนเทรน) — คือ "เจอ cluster ใหม่" ไม่ใช่ "ไม่มีพิกัดนี้ในข้อมูล train"
+                row.update(TOPIC=pred["topic"], NO_REF_REASON="new_cluster",
                            ALERT_STATUS=None, ALERT_METRIC=None, GROUP_MEAN_CIFVALTHB=None,
                            ALERT_THRESHOLD_LOW_CIFVALTHB=None, ALERT_THRESHOLD_HIGH_CIFVALTHB=None,
                            GROUP_MEAN_PRICE_PER_KG=None, ALERT_THRESHOLD_LOW_PRICE_PER_KG=None,
                            ALERT_THRESHOLD_HIGH_PRICE_PER_KG=None)
-                n_no_reference += 1
+                n_new_cluster += 1
             else:
                 status = pred["status"]
                 if status != "normal":
@@ -106,7 +110,7 @@ def run(xlsx_path: str = TEST_XLSX_PATH, db_path: str = TEST_DB_PATH, embedder=N
                 threshold_low, threshold_high = _thresholds(stats["mean_price"])
                 threshold_low_kg, threshold_high_kg = _thresholds(stats.get("mean_price_per_kg"))
                 row.update(
-                    TOPIC=pred["topic"],
+                    TOPIC=pred["topic"], NO_REF_REASON=None,
                     ALERT_STATUS=status, ALERT_METRIC=pred.get("alert_metric"),
                     GROUP_MEAN_CIFVALTHB=stats["mean_price"],
                     ALERT_THRESHOLD_LOW_CIFVALTHB=threshold_low, ALERT_THRESHOLD_HIGH_CIFVALTHB=threshold_high,
@@ -120,11 +124,13 @@ def run(xlsx_path: str = TEST_XLSX_PATH, db_path: str = TEST_DB_PATH, embedder=N
         "n_rows": n_rows,
         "n_headings_seen": int(declarations["HEADING"].nunique()) if n_rows else 0,
         "n_headings_matched": len(headings_matched),
-        "n_no_reference": n_no_reference,
+        "n_no_model": n_no_model,
+        "n_new_cluster": n_new_cluster,
         "n_flagged": n_flagged,
     }
     log(
         f"[pipeline] เสร็จสิ้น — {n_rows} แถว, มีโมเดลอ้างอิงตรง {len(headings_matched)} heading, "
-        f"ไม่มีข้อมูลอ้างอิง {n_no_reference} แถว, flag ผิดปกติ {n_flagged} แถว"
+        f"ยังไม่มีพิกัดในข้อมูล train {n_no_model} แถว, เทรนแล้วแต่เจอ cluster ใหม่ {n_new_cluster} แถว, "
+        f"flag ผิดปกติ {n_flagged} แถว"
     )
     return rows, summary

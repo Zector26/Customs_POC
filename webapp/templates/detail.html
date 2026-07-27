@@ -1,9 +1,7 @@
 <div class="dh ch-{{ r.status }}">
   <button class="dclose" onclick="closeDrawer()">✕</button>
   <div class="dh-top">
-    <span class="status big {{ r.status }}">
-      {% if r.status == 'red' %}Undervalue{% elif r.status == 'orange' %}Overvalue{% elif r.status == 'green' %}Normal{% else %}Unknown{% endif %}
-    </span>
+    <span class="status big {{ r.status }}">{{ r.status_label }}</span>
     <span class="kind import">ใบขนสินค้าขาเข้า</span>
   </div>
   <h2 class="mono">{{ r.decl_no }}</h2>
@@ -18,7 +16,6 @@
   <div class="card-h">ผลการจัดกลุ่ม (BERTopic)</div>
   <div class="kv">
     <div><label>พิกัด (TRFCLS 8 หลักแรก)</label><span class="mono">{{ r.heading }}</span></div>
-    <div><label>Topic</label><span class="mono">{{ r.topic }}</span></div>
   </div>
 </div>
 
@@ -44,8 +41,10 @@
   <div class="guard warn">🔶 มูลค่าที่สำแดงสูงกว่า threshold สูงของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาสูงผิดปกติ (Overvalue)</div>
   {% elif r.status == 'green' %}
   <div class="guard ok">✓ มูลค่าที่สำแดงอยู่ในช่วงปกติเมื่อเทียบกับกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้)</div>
+  {% elif r.status == 'new_cluster' %}
+  <div class="guard new">🔵 พิกัดนี้เทรนไว้แล้ว แต่รายการนี้ไม่เข้ากลุ่มใดที่มีสถิติราคาอ้างอิง (อาจเป็นกลุ่มสินค้าใหม่ที่ยังไม่เคยเห็นตอนเทรน) ยังตัดสิน undervalue/overvalue ไม่ได้</div>
   {% else %}
-  <div class="guard">⚪ ยังตัดสินไม่ได้ — พิกัดนี้ไม่มีโมเดล/สถิติราคาจากขา train ให้เทียบ (อาจยังไม่เคยเทรน หรือถูกจัดเป็น noise) ต้องรัน/รอผลขา train ก่อนถึงจะประเมินรายการนี้ได้</div>
+  <div class="guard">⚪ ยังตัดสินไม่ได้ — พิกัดนี้ยังไม่มีในข้อมูลที่ขา train เคยเทรนเลย (ยังไม่เคยเทรน หรือเทรนจากข้อมูลที่ไม่มีพิกัดนี้) ต้องรัน/รอผลขา train ก่อนถึงจะประเมินรายการนี้ได้</div>
   {% endif %}
 </div>
 
