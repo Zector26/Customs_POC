@@ -15,6 +15,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import joblib
 from sentence_transformers import SentenceTransformer
 from pythainlp.tokenize import word_tokenize
+from pythainlp.util import normalize as _thai_normalize
 from bertopic import BERTopic
 from hdbscan import HDBSCAN
 from umap import UMAP
@@ -77,6 +78,12 @@ _TOKEN_HAS_ALNUM_RE = re.compile(r"[^\W_]", re.UNICODE)
 
 
 def _thai_english_tokenizer(text: str) -> list[str]:
+    # sara am (ำ) ในข้อมูลจริงบางแถวเก็บเป็นสองตัวอักษรแยก (นิคหิต ํ + สระอา า) แทนตัวอักษรรวมตัวเดียว
+    # (ำ) — สองแบบนี้หน้าตาเหมือนกันแต่คนละ codepoint และไม่ใช่ canonical equivalent กัน (unicodedata.
+    # normalize ธรรมดาแก้ไม่ได้) ทำให้ dictionary ของ pythainlp จับคำไม่ได้ ตัดคำผิดตำแหน่งกลายเป็นเศษคำ
+    # เช่น "สำหรับ" -> "สํา"+"หรับ" — ต้อง normalize แบบเฉพาะภาษาไทยก่อนตัดคำเสมอ (พบจริง ~6% ของข้อความ
+    # ไม่ซ้ำในบาง heading จากข้อมูลจริง ทำให้ topic keyword/Name ที่โชว์บนเว็บมีเศษคำแบบนี้ปนอยู่)
+    text = _thai_normalize(text)
     return [t for t in word_tokenize(text, engine="newmm") if _TOKEN_HAS_ALNUM_RE.search(t)]
 
 
@@ -137,7 +144,10 @@ def run_bertopic(
     # จัดเอกสาร noise (-1) เข้ากับ topic ที่ใกล้ที่สุด (ถ้าเกิน threshold) แทนที่จะปล่อยให้เป็นกลุ่ม "noise"
     # ของตัวเอง ซึ่งไม่มีความหมายเพราะเอกสารใน noise ไม่ได้เกี่ยวข้องกันจริง — ต้องเรียก update_topics ตาม
     # ไม่งั้น keyword/representative docs ของแต่ละ topic (build_topic_descriptions) จะไม่ตรงกับ label ใหม่
-    if -1 in labels:
+    # ต้องมี topic จริงเหลืออยู่อย่างน้อย 1 กลุ่มด้วย — ถ้า HDBSCAN ตัดสินว่าทุกเอกสารเป็น noise หมด (ข้อมูล
+    # กระจัดกระจายเกินไป พบได้จริงกับบาง heading) reduce_outliers ไม่มี topic ให้จับคู่เลย จะ crash ตรง
+    # cosine_similarity ข้างในเพราะ topic_embeddings_ ของ topic จริงมี 0 แถว
+    if -1 in labels and len(set(labels) - {-1}) > 0:
         labels = topic_model.reduce_outliers(
             texts, list(labels), strategy=REDUCE_OUTLIERS_STRATEGY, embeddings=embeddings,
             threshold=REDUCE_OUTLIERS_THRESHOLD,
