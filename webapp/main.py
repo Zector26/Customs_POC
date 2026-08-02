@@ -72,6 +72,68 @@ def _isna(v) -> bool:
     return v is None or (isinstance(v, float) and pd.isna(v))
 
 
+def _ai_signal(r: dict, alert_status: str | None) -> dict | None:
+    """สัญญาณผิดปกติที่ตรวจพบ ใช้ metric เดียวกับที่ predict_new_item ใช้ตัดสินจริง (ALERT_METRIC) — คืน
+    None ถ้ายังไม่มีค่าเฉลี่ยกลุ่มอ้างอิงเลย (no_model/new_cluster ดู _screening_summary สำหรับ 2 เคสนี้แทน)"""
+    if alert_status not in ("undervalue", "overvalue", "normal"):
+        return None
+    if r["ALERT_METRIC"] == "price_per_kg":
+        value, mean, unit = r["CIFVALTHB"] / r["WGT_KG"], r["GROUP_MEAN_PRICE_PER_KG"], "บาท/กก."
+    else:
+        value, mean, unit = r["CIFVALTHB"], r["GROUP_MEAN_CIFVALTHB"], "บาท"
+    if _isna(mean) or not mean:
+        return None
+    pct_of_mean = round(value / mean * 100)
+    heading = r["HEADING"]
+
+    if alert_status == "undervalue":
+        label = "สำแดงราคาต่ำกว่าจริง (Undervaluation)"
+        detail = (
+            f"ราคาต่อหน่วยผิดปกติเทียบสินค้าพิกัดเดียวกัน — รายการนี้สำแดงราคา {value:,.0f} {unit} "
+            f"คิดเป็น {pct_of_mean}% ของราคากลางกลุ่มพิกัด {heading} ({mean:,.0f} {unit}) "
+            "ต่ำกว่าค่ากลางของเพื่อนกลุ่มเดียวกันอย่างมีนัยสำคัญ"
+        )
+    elif alert_status == "overvalue":
+        label = "สำแดงราคาสูงกว่าจริง (Overvaluation)"
+        detail = (
+            f"ราคาต่อหน่วยผิดปกติเทียบสินค้าพิกัดเดียวกัน — รายการนี้สำแดงราคา {value:,.0f} {unit} "
+            f"คิดเป็น {pct_of_mean}% ของราคากลางกลุ่มพิกัด {heading} ({mean:,.0f} {unit}) "
+            "สูงกว่าค่ากลางของเพื่อนกลุ่มเดียวกันอย่างมีนัยสำคัญ"
+        )
+    else:
+        label = "ราคาอยู่ในช่วงปกติ"
+        detail = (
+            f"รายการนี้สำแดงราคา {value:,.0f} {unit} คิดเป็น {pct_of_mean}% ของราคากลางกลุ่มพิกัด "
+            f"{heading} ({mean:,.0f} {unit}) อยู่ในช่วงที่ยอมรับได้ (±50% ของค่ากลาง)"
+        )
+    return {"status": alert_status, "label": label, "detail": detail, "pct_of_mean": pct_of_mean}
+
+
+def _screening_summary(r: dict, alert_status: str | None, signal: dict | None) -> str:
+    """สรุปผลการคัดกรองเป็นข้อความอ่านง่าย 1 ย่อหน้า — ครอบทุกสถานะที่เป็นไปได้ (ดู _row_view/status_label)"""
+    heading = r["HEADING"]
+    if signal is not None and alert_status == "undervalue":
+        return (
+            f"ใบขนสินค้าฉบับนี้ถูกจัดเป็นสถานะสีแดง เนื่องจากระบบตรวจพบว่าราคาที่สำแดงต่ำกว่าค่ากลางของกลุ่มสินค้า"
+            f"พิกัด {heading} อย่างมีนัยสำคัญ (คิดเป็น {signal['pct_of_mean']}% ของราคากลางเท่านั้น) "
+            "ควรตรวจสอบเอกสารและราคาที่สำแดงเพิ่มเติม"
+        )
+    if signal is not None and alert_status == "overvalue":
+        return (
+            f"ใบขนสินค้าฉบับนี้ถูกจัดเป็นสถานะสีส้ม เนื่องจากระบบตรวจพบว่าราคาที่สำแดงสูงกว่าค่ากลางของกลุ่มสินค้า"
+            f"พิกัด {heading} อย่างมีนัยสำคัญ (คิดเป็น {signal['pct_of_mean']}% ของราคากลาง) "
+            "ควรตรวจสอบเอกสารและราคาที่สำแดงเพิ่มเติม"
+        )
+    if signal is not None and alert_status == "normal":
+        return f"ใบขนสินค้าฉบับนี้ผ่านการตรวจสอบ ราคาที่สำแดงอยู่ในช่วงปกติเมื่อเทียบกับกลุ่มสินค้าพิกัด {heading}"
+    if r["NO_REF_REASON"] == "new_cluster":
+        return (
+            f"ใบขนสินค้าฉบับนี้อยู่ในพิกัด {heading} ที่มีโมเดลอ้างอิงแล้ว แต่คำบรรยายสินค้าไม่เข้ากลุ่มใดที่มีสถิติราคา"
+            "อ้างอิงชัดเจน (อาจเป็นสินค้ากลุ่มใหม่ที่ยังไม่เคยเห็นตอนเทรน) จึงยังสรุปว่าราคาผิดปกติหรือไม่ไม่ได้"
+        )
+    return f"พิกัด {heading} ยังไม่มีข้อมูลที่ผ่านการเทรนมาก่อน ระบบจึงยังไม่มีสถิติราคาอ้างอิงสำหรับตรวจสอบรายการนี้"
+
+
 def _row_view(r: dict) -> dict:
     """r: แถวจาก pipeline.run() — ALERT_STATUS เป็น 'undervalue' / 'overvalue' / 'normal' / None
     ถ้าเป็น None แยกสาเหตุตาม NO_REF_REASON ต่ออีกที: 'no_model' = พิกัดนี้ยังไม่มีในข้อมูลที่ขา train
@@ -88,6 +150,8 @@ def _row_view(r: dict) -> dict:
         status, status_label = "new_cluster", "เทรนแล้ว พบ Cluster ใหม่ (New Cluster)"
     else:
         status, status_label = "no_model", "ยังไม่มีพิกัดนี้ในข้อมูล Train (No Model)"
+    ai_signal = _ai_signal(r, alert_status)
+    screening_summary = _screening_summary(r, alert_status, ai_signal)
     return {
         "decl_id": r["DECL_ID"],
         "decl_no": f"{r['POTLDG']}-{r['IMPDCLNUM']}",
@@ -112,6 +176,8 @@ def _row_view(r: dict) -> dict:
         "threshold_high_kg": _money(r["ALERT_THRESHOLD_HIGH_PRICE_PER_KG"]) if not _isna(r["ALERT_THRESHOLD_HIGH_PRICE_PER_KG"]) else None,
         "alert_metric": r["ALERT_METRIC"],
         "price_per_kg": _money(r["CIFVALTHB"] / r["WGT_KG"]) if not _isna(r["WGT_KG"]) and r["WGT_KG"] else "-",
+        "ai_signal": ai_signal,
+        "screening_summary": screening_summary,
     }
 
 

@@ -152,7 +152,12 @@ def run_bertopic(
             texts, list(labels), strategy=REDUCE_OUTLIERS_STRATEGY, embeddings=embeddings,
             threshold=REDUCE_OUTLIERS_THRESHOLD,
         )
-        topic_model.update_topics(texts, topics=labels)
+        # ต้องส่ง vectorizer_model= ไปด้วยเสมอ — ถ้าไม่ส่ง BERTopic จะทิ้ง vectorizer_model ที่ตั้งไว้ (ตัว
+        # ที่ใช้ _thai_english_tokenizer) แล้วสร้าง CountVectorizer() ใหม่แบบ default ของ sklearn (regex
+        # \w\w+ ธรรมดา ไม่รู้จักขอบคำภาษาไทยเลย) มาคำนวณ c-TF-IDF ใหม่ทับของเดิมแทนแบบ silent (ดู
+        # BERTopic.update_topics source: self.vectorizer_model = vectorizer_model or CountVectorizer(...))
+        # ทำให้ topic label/keyword ที่โชว์บนเว็บเป็นเศษคำไทยที่ตัดผิดตำแหน่ง (เช่น "แผ_นงาน" จาก "แผ่นงาน")
+        topic_model.update_topics(texts, topics=labels, vectorizer_model=vectorizer_model)
 
     labels = np.array(labels)
     # centroid เฉลี่ยของ embedding ต่อ topic จริง (ไม่รวม -1) — คำนวณเองแทนการพึ่ง model.topic_embeddings_

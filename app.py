@@ -21,9 +21,9 @@ from clustering_core import (
 
 st.set_page_config(page_title="Customs BERTopic Clustering & Anomaly Detection", layout="wide")
 
-st.title("POC: จัดกลุ่มสินค้าด้วย BERTopic แยกตามพิกัด TRFCLS + Anomaly Detection")
+st.title("POC: จัดกลุ่มสินค้าภายใต้รหัสพิกัดศุลกากร 8 หลักและตรวจสอบราคาผิดปกติ")
 st.caption(
-    "แบ่งข้อมูลตาม TRFCLS 8 หลักแรก (AHTN) ก่อนด้วย exact-match แล้วรัน BERTopic แยกอิสระภายในแต่ละ "
+    "แบ่งข้อมูลตามพิกัดศุลกากรหลักแรก แล้วรัน BERTopic แยกอิสระภายในแต่ละ "
     "พิกัด เพื่อจัดกลุ่มย่อยตามคำอธิบายสินค้า จากนั้นหาค่าเฉลี่ยมูลค่า CIF รวม (CIFVALTHB) ในแต่ละกลุ่มย่อย "
     "เพื่อ flag รายการที่มูลค่าต่ำผิดปกติ"
 )
@@ -89,30 +89,30 @@ with tab_view:
                 fig_bar = px.bar(counts, x="TOPIC", y="COUNT", text="COUNT")
                 st.plotly_chart(fig_bar, width="stretch")
 
-                st.markdown("**ดูรายการสินค้าในแต่ละ topic**")
+                st.markdown("**ดูรายการสินค้าในแต่ละกลุ่ม **")
                 topic_desc = db.get_topic_descriptions_for_heading(con, view_heading)
                 topic_options = counts.sort_values("COUNT", ascending=False)["TOPIC"].tolist()
 
                 def _format_topic_option(t):
                     count = counts.loc[counts["TOPIC"] == t, "COUNT"].iloc[0]
                     label = topic_desc.get(int(t), {}).get("label")
-                    text = f"topic {t} — {label} ({count:,} รายการ)" if label else f"topic {t} ({count:,} รายการ)"
+                    text = f"กลุ่ม {t} — {label} ({count:,} รายการ)" if label else f"กลุ่ม {t} ({count:,} รายการ)"
                     return text + (" — noise/ไม่เข้ากลุ่มไหน" if t == -1 else "")
 
                 view_topic = st.selectbox(
-                    "เลือก topic", topic_options, format_func=_format_topic_option,
+                    "เลือกกลุ่ม", topic_options, format_func=_format_topic_option,
                     key=f"topic_select_{view_heading}",
                 )
                 repr_docs = topic_desc.get(int(view_topic), {}).get("repr_docs", [])
                 if repr_docs:
-                    st.caption("ตัวอย่างข้อความตัวแทน topic นี้:")
+                    st.caption("ตัวอย่างข้อความตัวแทนกลุ่มนี้:")
                     for doc in repr_docs:
                         st.caption(f"- {doc}")
 
                 total_topic_items = db.count_topic_items(con, view_heading, int(view_topic))
                 n_topic_pages = max(1, -(-total_topic_items // TOPIC_ITEMS_PAGE_SIZE))
                 topic_page = st.number_input(
-                    f"หน้า (1-{n_topic_pages}, {total_topic_items:,} รายการทั้งหมดใน topic นี้)",
+                    f"หน้า (1-{n_topic_pages}, {total_topic_items:,} รายการทั้งหมดในกลุ่มนี้)",
                     min_value=1, max_value=n_topic_pages, value=1, key=f"topic_page_{view_heading}_{view_topic}",
                 )
                 topic_items = db.query_topic_items_page(
@@ -128,7 +128,7 @@ with tab_view:
                     width="stretch", height=300,
                 )
 
-                if st.button(f"⬇️ เตรียมไฟล์ดาวน์โหลด topic {view_topic} ของพิกัดนี้ (CSV)", key=f"dl_topic_{view_heading}_{view_topic}"):
+                if st.button(f"⬇️ เตรียมไฟล์ดาวน์โหลดกลุ่ม {view_topic} ของพิกัดนี้ (CSV)", key=f"dl_topic_{view_heading}_{view_topic}"):
                     import tempfile
                     with st.spinner(f"กำลัง export {total_topic_items:,} rows..."):
                         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -229,7 +229,7 @@ with tab_test:
                 meta_mtime = (Path("models") / heading / "meta.json").stat().st_mtime
                 model_obj, group_stats, train_params, pca, viz_df = get_heading_model(heading, embedder, meta_mtime)
 
-                st.caption(f"โมเดลของพิกัด `{heading}` เทรนไว้ด้วยพารามิเตอร์: {train_params} — พบ {len(group_stats)} topic ตอนเทรน")
+                st.caption(f"โมเดลของพิกัด `{heading}` เทรนไว้ด้วยพารามิเตอร์: {train_params} — พบ {len(group_stats)} กลุ่มตอนเทรน")
 
                 prediction = predict_new_item(
                     model_obj, group_stats, embedder,
@@ -239,12 +239,12 @@ with tab_test:
 
                 if prediction["is_noise"] or prediction["group_stats"] is None:
                     st.warning(
-                        f"สินค้านี้ถูกจัดเป็น topic {prediction['topic']} ซึ่งไม่มีข้อมูลกลุ่มอ้างอิงตอนเทรน "
+                        f"สินค้านี้ถูกจัดเป็นกลุ่ม {prediction['topic']} ซึ่งไม่มีข้อมูลกลุ่มอ้างอิงตอนเทรน "
                         "(อาจเป็น noise หรือกลุ่มใหม่ที่ไม่เคยเห็น) จึงไม่สามารถเทียบมูลค่าเฉลี่ยได้"
                     )
                 else:
                     stats = prediction["group_stats"]
-                    st.success(f"จัดอยู่ใน **พิกัด {heading} / topic {prediction['topic']}**")
+                    st.success(f"จัดอยู่ใน **พิกัด {heading} / กลุ่ม {prediction['topic']}**")
                     if stats["sample_items"]:
                         st.caption("ตัวอย่างสินค้าในกลุ่มนี้ตอนเทรน: " + " / ".join(stats["sample_items"]))
 
@@ -309,6 +309,6 @@ with tab_test:
                     ))
                     st.plotly_chart(fig_compare, width="stretch")
                 elif viz_df is None:
-                    st.caption("พิกัดนี้ไม่มีกราฟเทียบ (ถูกข้าม BERTopic เพราะข้อมูลน้อยเกินไป — ทุกแถวถือเป็น topic เดียว)")
+                    st.caption("พิกัดนี้ไม่มีกราฟเทียบ (ถูกข้าม BERTopic เพราะข้อมูลน้อยเกินไป — ทุกแถวถือเป็นกลุ่มเดียว)")
 
 con.close()

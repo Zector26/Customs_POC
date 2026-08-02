@@ -114,6 +114,7 @@ table.grid{width:100%;border-collapse:collapse;font-size:13px}
 
 .card{background:#fff;border:1px solid var(--line);border-radius:10px;margin:14px 24px;padding:14px 16px}
 .card-h{font-weight:600;font-size:13.5px;margin-bottom:10px;color:var(--navy);border-bottom:1px solid var(--line);padding-bottom:7px}
+.card p{margin:0;font-size:12.5px;line-height:1.6;color:var(--ink)}
 .topiclabel{font-size:12.5px;color:var(--muted);margin-top:4px}
 .kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px}
 .kv>div{display:flex;justify-content:space-between;gap:10px;border-bottom:1px dotted #e7ecf2;padding-bottom:5px}

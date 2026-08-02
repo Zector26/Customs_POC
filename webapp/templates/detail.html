@@ -48,6 +48,21 @@
   {% endif %}
 </div>
 
+{% if r.ai_signal %}
+<div class="card">
+  <div class="card-h">🚩 สัญญาณที่ AI/ML ตรวจพบ (รายละเอียดเบื้องหลังคะแนนข้างบน)</div>
+  <div class="guard {{ 'block' if r.ai_signal.status == 'undervalue' else ('warn' if r.ai_signal.status == 'overvalue' else 'ok') }}">
+    <strong>{{ r.ai_signal.label }}</strong><br>
+    {{ r.ai_signal.detail }}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-h">สรุปผลการคัดกรอง</div>
+  <p>{{ r.screening_summary }}</p>
+</div>
+
 <div class="card">
   <div class="card-h">รายละเอียดสินค้า</div>
   <div class="kv">
