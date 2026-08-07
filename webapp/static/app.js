@@ -70,8 +70,21 @@ const GUARD_MSG={
 const PROCESS_MS=650, GAP_MS=250;
 const ROWS=JSON.parse(document.getElementById('rows-data').textContent);
 const rowsBody=document.getElementById('rows');
-const counts={red:0,orange:0,green:0,no_model:0,new_cluster:0};
 let idx=0, skipped=false;
+
+// อัปเดตตัวเลข KPI (ประมวลผลแล้ว/Undervalue/Overvalue/...) จาก summary ที่ server คำนวณมาให้ (ทั้งระบบ ไม่
+// ผูกกับหน้า pagination ใดๆ — ดู pipeline._system_wide_stats) ไม่ใช่นับจากแถวที่ commit ในหน้านี้เอง เพราะ
+// หน้านี้อาจมีแค่บางส่วนของทั้งระบบ (ดู webapp/main.py, webapp/pipeline.py)
+function updateKpisFromSummary(summary){
+  document.getElementById('kpi-total').textContent=summary.n_processed_total;
+  document.getElementById('kpi-red').textContent=summary.n_undervalue_total;
+  document.getElementById('kpi-orange').textContent=summary.n_overvalue_total;
+  document.getElementById('kpi-green').textContent=summary.n_normal_total;
+  document.getElementById('kpi-no_model').textContent=summary.n_no_model_total;
+  document.getElementById('kpi-new_cluster').textContent=summary.n_new_cluster_total;
+  const allX=document.querySelector('.kpi[data-f="all"] .kpi-x');
+  if(allX) allX.textContent='จาก '+summary.total_rows+' รายการ';
+}
 
 function sleep(ms){return new Promise(res=>setTimeout(res,ms));}
 
@@ -99,9 +112,6 @@ function showProcessing(r){
 
 function commitRow(r){
   rowsBody.insertAdjacentHTML('beforeend',rowHtml(r));
-  counts[r.status]++;
-  document.getElementById('kpi-'+r.status).textContent=counts[r.status];
-  document.getElementById('kpi-total').textContent=(idx+1);
   applyFilters();
 }
 
@@ -142,5 +152,60 @@ function finish(){
 
 document.getElementById('skipbtn').addEventListener('click',()=>{skipped=true;finish();});
 
+// แถวที่ sync มาตั้งแต่ตอนโหลดหน้าครั้งแรก (ของเก่า/รอบ sync แรก) โชว์ทันทีเลย ไม่ต้องรอ animation ไล่
+// ทีละแถว — เก็บ animation "กำลังประมวลผล..." ไว้ใช้กับแถวที่โผล่มาใหม่จริงๆผ่าน polling หลังจากนี้เท่านั้น
+// (skipped ยังเป็น false อยู่ — pollNew() จะเห็นว่า idx>=ROWS.length ตั้งแต่แรกแล้วเรียก playNext() ให้
+// แถวใหม่ที่ push เข้ามาทีหลัง animate ตามปกติ)
 applyFilters();
-if(ROWS.length) playNext(); else finish();
+for(;idx<ROWS.length;idx++) commitRow(ROWS[idx]);
+if(ROWS.length){
+  document.getElementById('stagecount').textContent=ROWS.length+' / '+ROWS.length;
+  document.getElementById('stagefill').style.width='100%';
+}
+document.getElementById('stagebadge').className='stage-badge done';
+document.getElementById('stagebadge').textContent='เสร็จสิ้น';
+document.getElementById('stageref').textContent='—';
+document.getElementById('stagedesc').textContent='ประมวลผลครบ '+ROWS.length+' รายการแล้ว';
+document.getElementById('skipbtn').disabled=true;
+
+// Polling หาแถวใหม่จาก Oracle เป็นระยะ (ไม่ใช่ WebSocket/SSE — เรียบง่ายกว่าสำหรับ demo นี้) stateless
+// ฝั่ง server เต็มที่ (ดู webapp/main.py /api/poll) — client (ตัวนี้เอง) เป็นฝ่ายจำ lastLoadTs (LOAD_TS
+// ล่าสุดที่ตัวเองมีอยู่แล้ว) แล้วส่งไปเป็น ?since= ทุกครั้ง เพื่อขอแค่แถวที่ใหม่กว่านั้น — ROWS/idx เป็นตัว
+// เดียวกับที่ playNext() ใช้อยู่ แค่ push แถวใหม่เข้า ROWS แล้วให้ playNext() เดินมาถึงเอง (ถ้ากำลังเล่นอยู่)
+// หรือสั่งเริ่มใหม่เอง (ถ้า idle ไปแล้วก่อนหน้า)
+//
+// เริ่มต้น lastLoadTs จาก INITIAL_MAX_LOAD_TS ที่ server คำนวณมาให้ (LOAD_TS สูงสุดของ "ทั้งระบบ" ไม่ใช่
+// แค่หน้านี้ — ดู webapp/main.py _run_and_load) ถ้า derive จากแค่ ROWS ของหน้านี้ (page 1 cap ที่
+// DEFAULT_PAGE_SIZE) แถวที่ตกไปอยู่หน้าอื่นแต่ LOAD_TS ใหม่กว่าทุกแถวที่โชว์อยู่ในหน้านี้จะ "หลุด" เข้ามา
+// ผ่าน poll หลังรีเฟรชไม่กี่วินาที เหมือนเป็นแถวใหม่ทั้งที่จริงมีอยู่ในระบบตั้งแต่ต้นแล้ว (แค่ตกหน้าอื่นไป
+// เพราะ pagination) — ยังวน ROWS ซ้ำไว้เป็น fallback เผื่อ INITIAL_MAX_LOAD_TS เป็น null (ระบบยังไม่มีข้อมูล
+// สักแถวเลย)
+let lastLoadTs = (typeof INITIAL_MAX_LOAD_TS !== 'undefined') ? INITIAL_MAX_LOAD_TS : null;
+for(const r of ROWS){ if(r.load_ts && (!lastLoadTs || r.load_ts>lastLoadTs)) lastLoadTs=r.load_ts; }
+
+const POLL_MS=4000;
+async function pollNew(){
+  try{
+    const url=lastLoadTs?('/api/poll?since='+encodeURIComponent(lastLoadTs)):'/api/poll';
+    const r=await fetch(url);
+    if(r.ok){
+      const data=await r.json();
+      if(data.rows && data.rows.length){
+        const wasIdle = idx>=ROWS.length;
+        ROWS.push(...data.rows);
+        for(const row of data.rows){ if(row.load_ts && (!lastLoadTs || row.load_ts>lastLoadTs)) lastLoadTs=row.load_ts; }
+        if(data.summary) updateKpisFromSummary(data.summary);
+        if(skipped){
+          for(;idx<ROWS.length;idx++) commitRow(ROWS[idx]);
+          document.getElementById('stagecount').textContent=ROWS.length+' / '+ROWS.length;
+          document.getElementById('stagefill').style.width='100%';
+        }else if(wasIdle){
+          document.getElementById('skipbtn').disabled=false;
+          playNext();
+        }
+      }
+    }
+  }catch(e){/* พลาดรอบเดียวเงียบไว้ได้ — ลองใหม่รอบถัดไปเอง ไม่ต้องรบกวนผู้ใช้ */}
+  setTimeout(pollNew,POLL_MS);
+}
+setTimeout(pollNew,POLL_MS);

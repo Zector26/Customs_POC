@@ -9,6 +9,7 @@ plotly
 joblib
 duckdb
 openpyxl
+oracledb
 fastapi
 uvicorn
 jinja2

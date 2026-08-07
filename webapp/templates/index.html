@@ -22,16 +22,16 @@
 </header>
 
 <div class="runinfo">
-  จำลองรับใบขนสินค้าขาเข้าเข้าระบบ <b>{{ run.n_rows }}</b> รายการ จากไฟล์ทดสอบ
+  จำลองรับใบขนสินค้าขาเข้า<b>ใหม่</b>เข้าระบบ <b>{{ total }}</b> รายการ จาก Oracle
 </div>
 
 <div class="kpis">
-  <div class="kpi" data-f="all"><div class="kpi-n" id="kpi-total">0</div><div class="kpi-l">ประมวลผลแล้ว</div><div class="kpi-x">จาก {{ total }} รายการ</div></div>
-  <div class="kpi red" data-f="red"><div class="kpi-n" id="kpi-red">0</div><div class="kpi-l">Undervalue</div><div class="kpi-x">สำแดงราคาต่ำผิดปกติ</div></div>
-  <div class="kpi orange" data-f="orange"><div class="kpi-n" id="kpi-orange">0</div><div class="kpi-l">Overvalue</div><div class="kpi-x">สำแดงราคาสูงผิดปกติ</div></div>
-  <div class="kpi green" data-f="green"><div class="kpi-n" id="kpi-green">0</div><div class="kpi-l">Normal</div><div class="kpi-x">ไม่พบความผิดปกติ</div></div>
-  <div class="kpi no_model" data-f="no_model"><div class="kpi-n" id="kpi-no_model">0</div><div class="kpi-l">No Model</div><div class="kpi-x">ยังไม่มีพิกัดนี้ในข้อมูล train</div></div>
-  <div class="kpi new_cluster" data-f="new_cluster"><div class="kpi-n" id="kpi-new_cluster">0</div><div class="kpi-l">New Cluster</div><div class="kpi-x">train แล้ว แต่เจอ cluster ใหม่</div></div>
+  <div class="kpi" data-f="all"><div class="kpi-n" id="kpi-total">{{ run.n_processed_total }}</div><div class="kpi-l">ประมวลผลแล้ว</div><div class="kpi-x">จาก {{ total }} รายการ</div></div>
+  <div class="kpi red" data-f="red"><div class="kpi-n" id="kpi-red">{{ run.n_undervalue_total }}</div><div class="kpi-l">Undervalue</div><div class="kpi-x">สำแดงราคาต่ำผิดปกติ</div></div>
+  <div class="kpi orange" data-f="orange"><div class="kpi-n" id="kpi-orange">{{ run.n_overvalue_total }}</div><div class="kpi-l">Overvalue</div><div class="kpi-x">สำแดงราคาสูงผิดปกติ</div></div>
+  <div class="kpi green" data-f="green"><div class="kpi-n" id="kpi-green">{{ run.n_normal_total }}</div><div class="kpi-l">Normal</div><div class="kpi-x">ไม่พบความผิดปกติ</div></div>
+  <div class="kpi no_model" data-f="no_model"><div class="kpi-n" id="kpi-no_model">{{ run.n_no_model_total }}</div><div class="kpi-l">No Model</div><div class="kpi-x">ยังไม่มีพิกัดนี้ในข้อมูล train</div></div>
+  <div class="kpi new_cluster" data-f="new_cluster"><div class="kpi-n" id="kpi-new_cluster">{{ run.n_new_cluster_total }}</div><div class="kpi-l">New Cluster</div><div class="kpi-x">train แล้ว แต่เจอ cluster ใหม่</div></div>
 </div>
 
 <div class="stage" id="stage">
@@ -77,10 +77,27 @@
 </table>
 </div>
 
+{% if run.total_pages and run.total_pages > 1 %}
+<div class="pagination">
+  {% if run.page > 1 %}
+    <a href="/?page={{ run.page - 1 }}">« ก่อนหน้า</a>
+  {% else %}
+    <span class="disabled">« ก่อนหน้า</span>
+  {% endif %}
+  <span class="pageinfo">หน้า {{ run.page }} / {{ run.total_pages }} (รวม {{ run.total_rows }} แถวในระบบ)</span>
+  {% if run.page < run.total_pages %}
+    <a href="/?page={{ run.page + 1 }}">ถัดไป »</a>
+  {% else %}
+    <span class="disabled">ถัดไป »</span>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="drawer-bg" id="drawerbg"></div>
 <aside class="drawer" id="drawer"><div class="drawer-body" id="drawerbody"></div></aside>
 
 <script id="rows-data" type="application/json">{{ rows_json | safe }}</script>
+<script>const INITIAL_MAX_LOAD_TS = {{ max_load_ts_json | safe }};</script>
 <script src="/static/app.js?v={{ asset_v }}"></script>
 </body>
 </html>

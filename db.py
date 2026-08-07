@@ -377,6 +377,16 @@ def get_missing_texts_for_embedding(con: duckdb.DuckDBPyConnection) -> pd.DataFr
     """).df()
 
 
+def get_cached_embedding(con: duckdb.DuckDBPyConnection, text_hash: str) -> np.ndarray | None:
+    """คืน embedding ที่แคชไว้แล้วของ TEXT_HASH นี้ (None ถ้ายังไม่เคยคำนวณ) — ใช้ตอน predict รายการเดี่ยวๆ
+    ทีละแถว (ดู webapp/pipeline.py) ต่างจาก get_unique_embeddings_for_heading ที่ดึงมาทีเดียวหลายแถวตอน
+    เทรน — shape (1, dim) ให้ตรงกับที่ embedder.encode([text]) คืนมาเป๊ะ ใช้แทนกันได้ทันที"""
+    row = con.execute("SELECT EMBEDDING FROM text_embedding_cache WHERE TEXT_HASH = ?", [text_hash]).fetchone()
+    if row is None:
+        return None
+    return np.frombuffer(row[0], dtype=np.float32).reshape(1, -1)
+
+
 def insert_embeddings(con: duckdb.DuckDBPyConnection, hashes: list[str], texts: list[str], embeddings: np.ndarray) -> None:
     cache_df = pd.DataFrame({
         "TEXT_HASH": hashes,

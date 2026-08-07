@@ -296,6 +296,7 @@ def predict_new_item(
     wgt_kg: float | None = None,
     alert_ratio: float = 0.5,
     pca=None,
+    precomputed_embedding: np.ndarray | None = None,
 ) -> dict:
     """ทำนาย topic ของสินค้าใหม่ 1 รายการภายใน heading ที่กำหนด (ต้องโหลดโมเดล/group_stats ของ heading
     นั้นมาก่อนแล้ว) แล้วเทียบราคากับ threshold ของ topic นั้น (ถ้าใส่ cifvalthb มา) — ถ้ามี wgt_kg (> 0)
@@ -303,9 +304,17 @@ def predict_new_item(
     ออกไป) มิฉะนั้น fallback ไปเทียบ cifvalthb แบบเดิม — ต้อง mirror logic เดียวกับ db.persist_heading_result
 
     threshold ต่ำ/สูงคำนวณจาก mean * (1 ± alert_ratio) — ต่ำกว่า threshold ต่ำ = undervalue, สูงกว่า
-    threshold สูง = overvalue, อยู่ระหว่างกลาง = normal"""
+    threshold สูง = overvalue, อยู่ระหว่างกลาง = normal
+
+    precomputed_embedding: ส่ง embedding ที่เคยคำนวณไว้แล้วเข้ามาแทนได้ (ข้าม embedder.encode() ซึ่งช้า) —
+    ผู้เรียกต้อง cache เองตาม TEXT_HASH ของ gdsdsc/gdsdscth คู่นั้น (ดู webapp/pipeline.py ที่ cache ไว้ข้าม
+    request เพราะรายการเดิมมักถูกพยากรณ์ซ้ำหลายครั้งทุกครั้งที่มีคนเปิดหน้าเว็บ) — result["embedding"] คืน
+    embedding ที่ใช้จริงกลับไปด้วยเสมอ ให้ผู้เรียกเอาไป cache ต่อได้ตอน cache miss"""
     text = build_text_for_embedding(gdsdscth, gdsdsc)
-    embedding = embedder.encode([EMBEDDING_PREFIX + text], normalize_embeddings=True)
+    embedding = (
+        precomputed_embedding if precomputed_embedding is not None
+        else embedder.encode([EMBEDDING_PREFIX + text], normalize_embeddings=True)
+    )
 
     if model_obj is None:
         # heading นี้ถูกข้ามตอนเทรน (ข้อมูลน้อยเกินไปสำหรับ BERTopic) — ทุกแถวเป็น topic เดียว (0)
@@ -317,7 +326,7 @@ def predict_new_item(
             topic = _reassign_via_centroids(group_stats, embedding, REDUCE_OUTLIERS_THRESHOLD)
 
     stats = group_stats.get(str(topic))
-    result = {"topic": topic, "group_stats": stats, "is_noise": topic == -1, "coords_2d": None}
+    result = {"topic": topic, "group_stats": stats, "is_noise": topic == -1, "coords_2d": None, "embedding": embedding}
 
     if cifvalthb is not None and stats is not None:
         use_per_kg = wgt_kg is not None and wgt_kg > 0 and stats.get("mean_price_per_kg") is not None

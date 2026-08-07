@@ -2,11 +2,32 @@ name: customs-poc   # fix ชื่อ project ไว้ตรงๆ ไม่�
                     # customs_poc) — ทำให้ชื่อ volume คงที่เสมอ (customs-poc_customs-data ฯลฯ) เดา/อ้างอิงได้
 
 services:
+  # Oracle mock — จำลอง Oracle DB ต้นทางไว้ทดสอบต่อจากไฟล์ xlsx (ขา test จะย้ายไปอ่านจากตัวนี้ตรงๆ ทีหลัง
+  # แทน webapp/fixtures/*.xlsx) ใช้ image gvenzl/oracle-free (Oracle Database Free 23c, ฟรี/โอเพนซอร์สแท้ๆ
+  # ไม่ใช่ Oracle XE เก่าที่ EOL แล้ว) — PDB ที่ใช้จริงคือ "FREEPDB1" (ตัว default ของ image นี้เอง) หลัง
+  # container พร้อมแล้วต้องรันมือ 1 ครั้งเพื่อสร้างตาราง + โหลดข้อมูลจาก
+  # webapp/fixtures/test_declarations.xlsx เข้าไป:
+  #   docker compose run --rm --entrypoint python app scripts/seed_oracle_mock.py
+  oracle-mock:
+    image: gvenzl/oracle-free:23-slim-faststart
+    environment:
+      - ORACLE_PASSWORD=mock_password_local_only   # เครื่อง dev/test ในเครื่องเท่านั้น ไม่ใช่ของจริง
+    ports:
+      - "1521:1521"
+    volumes:
+      - oracle-mock-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+
   # ขา 1: train — ตั้งแต่ container เริ่ม ingest + เทรน BERTopic อัตโนมัติบนข้อมูลจริง (ถ้ายังไม่มีโมเดล)
   # แล้วเปิดเว็บแอป Streamlit ให้ดูผล/ทดสอบทีละรายการ
   app:
     build: .
-    image: customs-bertopic:latest
     ports:
       - "8501:8501"
     volumes:
@@ -27,22 +48,30 @@ services:
     restart: unless-stopped
 
   # ขา 2: test — "ต้องรอผลจากขา train ก่อน" (อ่านโมเดล/สถิติราคาที่เทรนไว้แล้วจาก volume customs-models
-  # ตัวเดียวกับขา train แบบ read-only) ทุกครั้งที่เปิด/รีเฟรชหน้าเว็บ (http://localhost:8800) จะ ingest
-  # ไฟล์ทดสอบคงที่ที่ bake ไว้ในอิมเมจ (webapp/fixtures/) แล้ว "พยากรณ์" แต่ละรายการเทียบกับโมเดลนั้น
-  # (ไม่เทรนโมเดลใหม่เอง) จำลองว่ามีชุดใบขนสินค้าขาเข้าเข้ามาให้ระบบตรวจทุกครั้ง — heading ที่ไม่มีโมเดล
-  # อ้างอิงจะแสดงสถานะ "ไม่มีข้อมูลอ้างอิง" (ดู webapp/pipeline.py) ผลการพยากรณ์เก็บลง DuckDB แยกต่างหาก
-  # ภายใน container เอง (ไม่ persist ข้ามรัน, ไม่เขียนกลับเข้า customs-models เลย)
+  # ตัวเดียวกับขา train แบบ read-only) ทุกครั้งที่เปิด/รีเฟรชหน้าเว็บ (http://localhost:8800) จะ query
+  # ตาราง DECLARATIONS จาก Oracle (service oracle-mock — ดู webapp/pipeline.py, scripts/seed_oracle_mock.py)
+  # แล้ว "พยากรณ์" แต่ละรายการเทียบกับโมเดลนั้น (ไม่เทรนโมเดลใหม่เอง) จำลองว่ามีชุดใบขนสินค้าขาเข้าเข้ามาให้
+  # ระบบตรวจทุกครั้ง — heading ที่ไม่มีโมเดลอ้างอิงจะแสดงสถานะ "ไม่มีข้อมูลอ้างอิง" (ดู webapp/pipeline.py)
+  # ผลการพยากรณ์เก็บลง DuckDB แยกต่างหากภายใน container เอง (ไม่ persist ข้ามรัน, ไม่เขียนกลับเข้า
+  # customs-models เลย)
   webapp:
     build: .
-    image: customs-bertopic:latest
     entrypoint: ["python", "-X", "utf8", "-m", "uvicorn", "webapp.main:app"]
     command: ["--host", "0.0.0.0", "--port", "8800"]
     ports:
       - "8800:8800"
+    depends_on:
+      oracle-mock:
+        condition: service_healthy
     volumes:
       - customs-models:/app/models:ro              # โมเดล/สถิติราคาที่ขา train เทรนไว้แล้ว (อ่านอย่างเดียว)
       - customs-hf-cache:/app/.cache/huggingface   # ใช้ cache โมเดล embedding ร่วมกับขา train (ไม่โหลดซ้ำ)
     environment:
+      # ค่า default ตรงกับ service oracle-mock ในไฟล์นี้อยู่แล้ว (ดู webapp/pipeline.py) — เปลี่ยนให้ต่อ
+      # Oracle จริงแทนได้โดยตั้ง 3 ตัวนี้ ไม่ต้องแก้โค้ด
+      - ORACLE_DSN=oracle-mock:1521/freepdb1
+      - ORACLE_USER=system
+      - ORACLE_PASSWORD=mock_password_local_only
       # cache ของ multilingual-e5-large ถูกโหลดเข้า volume นี้ไว้ล่วงหน้าแล้ว (จาก hf_cache_e5_large.tar.gz
       # ที่แพ็คมาให้ในโปรเจกต์ — ดู README หัวข้อ "เครื่องออกเน็ตไม่ได้เลย") ไม่ต้องพยายามต่อเน็ตไปเช็ค
       # HuggingFace เลยแม้แต่ครั้งเดียว
@@ -60,3 +89,4 @@ volumes:
   customs-data:
   customs-models:
   customs-hf-cache:
+  oracle-mock-data:
