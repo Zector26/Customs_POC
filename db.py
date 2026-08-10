@@ -107,6 +107,11 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
         con.execute(f"ALTER TABLE declarations ADD COLUMN IF NOT EXISTS {col_def}")
     con.execute("CREATE INDEX IF NOT EXISTS idx_declarations_hash ON declarations(TEXT_HASH)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_declarations_heading ON declarations(HEADING)")
+    # ใช้กับ keyset pagination ของ webapp/pipeline.py (get_declarations_since) — เรียง/กรองตาม
+    # (DTELDG, IMPDCLNUM, DECL_ID) แทน LIMIT/OFFSET
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_declarations_page_cursor ON declarations(DTELDG, IMPDCLNUM, DECL_ID)"
+    )
     con.execute("""
         CREATE TABLE IF NOT EXISTS text_embedding_cache (
             TEXT_HASH VARCHAR PRIMARY KEY,

@@ -1,9 +1,10 @@
 """
-เว็บแอปแสดงผลลัพธ์ (FastAPI, ไม่มีส่วน LLM) — "ขา test" ที่ทำงานจากการเปิด/รีเฟรชหน้าเว็บ ต้องรอผลจาก
-"ขา train" ก่อน (รันตอน docker container เริ่ม — ดู startup.py/train.py) เพราะทุกครั้งที่มีคนเปิดหน้าแรก
-ระบบจะ sync แถวใหม่จาก Oracle (pipeline.ORACLE_DSN) แบบ incremental แล้ว "พยากรณ์" (ไม่ใช่เทรนใหม่) เทียบ
-กับโมเดล BERTopic + สถิติราคาที่ขา train เทรนไว้แล้วจากข้อมูลจริง — จำลองว่ามีชุด transaction ใบขนสินค้า
-ขาเข้าเข้ามาให้ระบบตรวจ ถ้า heading (TRFCLS 8 หลักแรก) ไหนไม่มีโมเดลอ้างอิงเลย จะแสดงสถานะกลาง
+เว็บแอปแสดงผลลัพธ์ (FastAPI, ไม่มีส่วน LLM) — "ขา test" ต้องรอผลจาก "ขา train" ก่อน (รันตอน docker
+container เริ่ม — ดู startup.py/train.py) การ sync แถวใหม่จาก Oracle (pipeline.ORACLE_DSN) แบบ incremental
++ "พยากรณ์" (ไม่ใช่เทรนใหม่) เทียบกับโมเดล BERTopic + สถิติราคาที่ขา train เทรนไว้แล้ว ทำเป็นระยะในเธรด
+พื้นหลังต่างหาก (ดู _sync_and_predict_loop ข้างล่าง) ไม่ผูกกับ request ของใครเลย — index()/poll() แค่อ่าน
+สิ่งที่ sync/predict ไว้แล้ว (เร็วเสมอไม่ว่าข้อมูลจะสะสมแค่ไหน) จำลองว่ามีชุด transaction ใบขนสินค้าขาเข้า
+เข้ามาให้ระบบตรวจอยู่เรื่อยๆ ถ้า heading (TRFCLS 8 หลักแรก) ไหนไม่มีโมเดลอ้างอิงเลย จะแสดงสถานะกลาง
 "ไม่มีข้อมูลอ้างอิง" แทน (ดู webapp/pipeline.py)
 
 ทุกคนที่เปิดหน้าเว็บ "/" เห็น**ชุดข้อมูลเดียวกันเสมอ** ไม่มี session/cookie แยกตามคนดู — index() ขอทุกแถว
@@ -55,10 +56,31 @@ ASSET_V = int(time.time())
 print("[webapp] กำลังโหลดโมเดล embedding (ครั้งเดียวตอน process เริ่ม)...", flush=True)
 EMBEDDER = load_embedder()
 
-# ผลลัพธ์ของการรันล่าสุด (อัปเดตทุกครั้งที่มีคนเปิดหน้าแรก "/" หรือ poll — ดู index()/poll()) เก็บไว้ให้
-# /d/{decl_id} อ่านต่อได้โดยไม่ต้องรัน pipeline ซ้ำตอนเปิด drawer ดูรายละเอียด (สะสมไปเรื่อยๆตามอายุ
-# process — รับได้สำหรับ demo/POC นี้ ไม่ใช่ปัญหาจริงถ้าไม่ได้รันเป็นสัปดาห์)
-_LAST_BY_ID: dict = {}
+# sync จาก Oracle + พยากรณ์แถวที่ค้างทั้งระบบเป็นระยะ ในเธรดพื้นหลังต่างหาก ไม่ผูกกับ request ของใครเลย (ดู
+# webapp/pipeline.py module docstring/sync_and_predict_pending) — เดิมทำเป็นส่วนหนึ่งของ pipeline.run() ที่
+# เรียกจาก index()/poll() ตรงๆ ยิ่งข้อมูลเข้าถี่/สะสมมาก ยิ่งทำให้ request ของทุก tab ต้องรอ sync+predict
+# ของ "ทั้งระบบ" เสร็จก่อนตอบ (บล็อกกันหมดผ่าน _PIPELINE_LOCK) ย้ายมาไว้นี่แทนให้ request path เหลือแค่งาน
+# เล็กๆ (พยากรณ์เฉพาะ page/delta ที่ขอมา — ดู _run_and_load/pipeline.run) เร็วเสมอไม่ว่าข้อมูลจะสะสมแค่ไหน
+SYNC_INTERVAL_SECONDS = 3  # เร็วกว่า/เท่ากับ POLL_MS ของ client (webapp/static/app.js) เล็กน้อย ไม่ให้ข้อมูล
+# ใหม่โผล่ช้ากว่าที่ผู้ใช้กด poll เห็น
+
+
+def _sync_and_predict_loop() -> None:
+    while True:
+        try:
+            with _PIPELINE_LOCK:
+                pipeline.sync_and_predict_pending(embedder=EMBEDDER)
+        except Exception as e:
+            # เธรดพื้นหลังพังรอบเดียวไม่ควรทำให้ webapp ทั้งตัวตายไปด้วย — log แล้วลองรอบถัดไปเอง (เช่น Oracle
+            # หลุดชั่วคราว) ไม่ต้อง raise ต่อ (ไม่มีใครดักอยู่ปลายเธรดนี้อยู่แล้ว)
+            print(f"[webapp] sync+predict เบื้องหลังพัง (จะลองใหม่รอบถัดไป): {e}", flush=True)
+        time.sleep(SYNC_INTERVAL_SECONDS)
+
+
+print("[webapp] sync+predict ครั้งแรกก่อนเปิดรับ request ...", flush=True)
+with _PIPELINE_LOCK:
+    pipeline.sync_and_predict_pending(embedder=EMBEDDER)
+threading.Thread(target=_sync_and_predict_loop, daemon=True).start()
 
 TH_MONTHS = [
     "", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
@@ -199,14 +221,16 @@ def _row_view(r: dict) -> dict:
     }
 
 
-def _run_and_load(since_ts=None, page: int = 1):
+def _run_and_load(since_ts=None, page: int = 1, after: str | None = None, before: str | None = None):
     """จำลองว่ามีชุด transaction ใบขนสินค้าขาเข้าเข้ามาให้ระบบประมวลผล — เรียกใหม่ทุกครั้งที่เปิด/
-    รีเฟรชหน้าแรกหรือ poll (ไม่ใช่แค่ตอน process เริ่ม) ดู module docstring ด้านบน
+    รีเฟรชหน้าแรกหรือ poll (ไม่ใช่แค่ตอน process เริ่ม) ดู module docstring ด้านบน (sync จาก Oracle +
+    พยากรณ์ทั้งระบบทำในเธรดพื้นหลังแยกแล้ว — เรียกตรงนี้แค่ query/พยากรณ์ page เล็กๆที่ขอมาเป็น fallback)
 
     since_ts=None (ดีฟอลต์ ใช้กับ index() เสมอ) คืนแถวของหน้า page (ดู pipeline.DEFAULT_PAGE_SIZE) ไม่ใช่
-    ทุกแถวทีเดียว — ระบุ since_ts มาเพื่อให้ /api/poll เอาไปกรองเฉพาะแถวใหม่กว่านั้นแทน (ไม่ paginate,
-    stateless เต็มที่ ไม่มี session ฝั่ง server เลย — ดู module docstring) ไม่ว่าจะหน้าไหนก็ตาม แถวที่เคย
-    พยากรณ์ไปแล้วจะไม่ถูกพยากรณ์ซ้ำ (ดู pipeline.run — test_predictions cache)
+    ทุกแถวทีเดียว ผ่าน keyset pagination (after/before — ดู pipeline.get_declarations_since) — ระบุ since_ts
+    มาเพื่อให้ /api/poll เอาไปกรองเฉพาะแถวใหม่กว่านั้นแทน (ไม่ paginate, stateless เต็มที่ ไม่มี session ฝั่ง
+    server เลย — ดู module docstring) ไม่ว่าจะหน้าไหนก็ตาม แถวที่เคยพยากรณ์ไปแล้วจะไม่ถูกพยากรณ์ซ้ำ (ดู
+    pipeline.run — test_predictions cache)
 
     คืน max_load_ts มาด้วย (LOAD_TS สูงสุดของ "ทั้งระบบ" ไม่ใช่แค่หน้านี้ — ดู pipeline.get_declarations_since)
     ให้ index() ส่งต่อให้ JS ใช้เป็นจุดเริ่ม poll แทนการคำนวณจากแค่แถวที่โชว์ในหน้านี้ (ดู index()/module
@@ -215,7 +239,8 @@ def _run_and_load(since_ts=None, page: int = 1):
     ต้นแล้ว แค่ตกหน้าอื่นไปเพราะ pagination)"""
     print("[webapp] เริ่มจำลองการประมวลผลชุดใบขนสินค้าขาเข้าจาก Oracle...", flush=True)
     with _PIPELINE_LOCK:
-        raw_rows, run_summary, max_load_ts = pipeline.run(since_ts=since_ts, page=page, embedder=EMBEDDER)
+        raw_rows, run_summary, max_load_ts = pipeline.run(
+            since_ts=since_ts, page=page, after=after, before=before, embedder=EMBEDDER)
     # เรียงตามลำดับที่เข้ามาจริง (DTELDG, IMPDCLNUM จาก pipeline.run) ไม่เรียงตามสถานะ — เพื่อให้หน้าเว็บ
     # ไล่แสดงทีละรายการตามลำดับที่ transaction "เข้ามา" ได้ ไม่ใช่โชว์รายการผิดปกติก่อนล่วงหน้า
     rows = [_row_view(r) for r in raw_rows]
@@ -223,14 +248,11 @@ def _run_and_load(since_ts=None, page: int = 1):
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, page: int = 1):
-    # ไม่มี since_ts — ทุกคนที่เปิด "/" ด้วย page เดียวกันเห็นแถวชุดเดียวกันเสมอ (ดู module docstring) —
-    # page มีไว้กันหน้าเว็บใหญ่เกินไปถ้าข้อมูลสะสมมาก ไม่ใช่ per-client state
-    rows, run_summary, max_load_ts = _run_and_load(page=page)
-    # สะสมไว้ข้าม request เพื่อให้ drawer รายละเอียด (/d/{decl_id}) เปิดดูแถวที่เคยโผล่มาจากรอบก่อน (รวมที่
-    # มาจาก /api/poll, ทุกหน้า) ได้เสมอ ไม่ใช่แค่แถวของรอบล่าสุด (หน่วยความจำโตไปเรื่อยๆตามอายุ process —
-    # รับได้สำหรับ demo/POC นี้ ไม่ใช่ปัญหาจริงถ้าไม่ได้รันเป็นสัปดาห์)
-    _LAST_BY_ID.update({r["decl_id"]: r for r in rows})
+def index(request: Request, page: int = 1, after: str | None = None, before: str | None = None):
+    # ไม่มี since_ts — ทุกคนที่เปิด "/" ด้วย after/before เดียวกันเห็นแถวชุดเดียวกันเสมอ (ดู module
+    # docstring) — page มีไว้แค่แสดงผล (เลขหน้า/total_pages) ไม่ใช่ per-client state, after/before คือคีย์
+    # จริงที่ใช้ดึงข้อมูล (ดู pipeline.get_declarations_since)
+    rows, run_summary, max_load_ts = _run_and_load(page=page, after=after, before=before)
     # ผลพยากรณ์ของทุกรายการคำนวณเสร็จแล้วในขั้นนี้ (ต้องรันเป็น batch เพราะสถิติกลุ่มต้องใช้ทั้งไฟล์)
     # แต่ส่งลง JS เป็นคิว แล้วให้หน้าเว็บ "เปิดเผย" ผลทีละรายการ จำลองว่าระบบกำลังตรวจแต่ละใบขนสด ๆ
     rows_json = json.dumps(rows, ensure_ascii=False).replace("</", "<\\/")
@@ -249,18 +271,23 @@ def poll(since: str | None = None):
     กว่า since เป็น JSON เปล่าๆ ไม่ render HTML (ไม่ paginate — ปกติมีไม่กี่แถวต่อรอบ poll อยู่แล้ว)"""
     since_ts = datetime.fromisoformat(since) if since else None
     rows, run_summary, _max_load_ts = _run_and_load(since_ts)
-    _LAST_BY_ID.update({r["decl_id"]: r for r in rows})
     return {"rows": rows, "summary": run_summary}
 
 
 @app.get("/d/{decl_id}", response_class=HTMLResponse)
 def detail(request: Request, decl_id: str):
-    r = _LAST_BY_ID.get(decl_id)
+    # อ่านตรงจาก DuckDB เสมอ (ไม่ใช้ cache ใน RAM ของ webapp เอง — เอาออกไปแล้วเพราะโตไม่มีที่สิ้นสุดตอน
+    # ข้อมูลจริงเข้าหลักล้าน record/วัน ดู pipeline.get_declaration_detail) ให้เห็นสถานะ retention ที่ถูกต้อง
+    # เสมอ — แถวที่ถูก purge ไปแล้ว (เก่ากว่า retention window) จะได้ 404 ตรงตามจริง ไม่ใช่ยังโชว์ของเก่าค้างไว้
+    with _PIPELINE_LOCK:
+        r = pipeline.get_declaration_detail(decl_id)
     if r is None:
         raise HTTPException(404)
-    return templates.TemplateResponse(request, "detail.html", {"r": r})
+    return templates.TemplateResponse(request, "detail.html", {"r": _row_view(r)})
 
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "rows": len(_LAST_BY_ID)}
+    with _PIPELINE_LOCK:
+        n = pipeline.count_declarations()
+    return {"status": "ok", "rows": n}

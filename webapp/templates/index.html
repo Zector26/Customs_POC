@@ -77,16 +77,19 @@
 </table>
 </div>
 
+{# ลิงก์ก่อนหน้า/ถัดไปใช้ before/after cursor (keyset pagination — ดู pipeline.get_declarations_since) เป็น
+   คีย์จริงที่ใช้ดึงข้อมูล ไม่ใช่ page เดิม (page มีไว้แค่แสดงผลเลขหน้า เดินหน้า/ถอยหลังทีละ 1 เท่านั้น ไม่มี
+   ปุ่ม "ไปหน้า N" ข้ามเอง) #}
 {% if run.total_pages and run.total_pages > 1 %}
 <div class="pagination">
-  {% if run.page > 1 %}
-    <a href="/?page={{ run.page - 1 }}">« ก่อนหน้า</a>
+  {% if run.prev_cursor %}
+    <a href="/?page={{ run.page - 1 }}&amp;before={{ run.prev_cursor | urlencode }}">« ก่อนหน้า</a>
   {% else %}
     <span class="disabled">« ก่อนหน้า</span>
   {% endif %}
   <span class="pageinfo">หน้า {{ run.page }} / {{ run.total_pages }} (รวม {{ run.total_rows }} แถวในระบบ)</span>
-  {% if run.page < run.total_pages %}
-    <a href="/?page={{ run.page + 1 }}">ถัดไป »</a>
+  {% if run.next_cursor %}
+    <a href="/?page={{ run.page + 1 }}&amp;after={{ run.next_cursor | urlencode }}">ถัดไป »</a>
   {% else %}
     <span class="disabled">ถัดไป »</span>
   {% endif %}

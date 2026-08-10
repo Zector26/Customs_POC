@@ -72,6 +72,22 @@ services:
       - ORACLE_DSN=oracle-mock:1521/freepdb1
       - ORACLE_USER=system
       - ORACLE_PASSWORD=mock_password_local_only
+      # ตาราง DECLARATIONS ของ Oracle จริง (module IMP3200) ใช้ชื่อคอลัมน์คนละชุดกับที่ oracle-mock/
+      # scripts/seed_oracle_mock.py ใช้ (ทุกคอลัมน์มี prefix IMP3200_ นำหน้า ยกเว้น LOAD_TS ที่ไม่มีคอลัมน์
+      # ตรงชื่อนี้เลย ใช้ IMP3200_DTETMEAMN แทน — เป็นเวลา insert จริงของแถว ยืนยันแล้วว่าไม่ใช่วันที่ทาง
+      # ธุรกิจ ปลอดภัยพอจะใช้เป็น watermark ของ incremental sync — ดู webapp/pipeline.py
+      # _load_declarations_from_oracle) เปิดใช้บรรทัดนี้ (ลบ # ข้างหน้า) ตอน deploy ต่อ Oracle จริง:
+      # - ORACLE_COLUMN_MAP={"DECL_ID":"IMP3200_DECL_ID","TRFCLS":"IMP3200_TRFCLS","GDSDSC":"IMP3200_GDSDSC","GDSDSCTH":"IMP3200_GDSDSCTH","CIFVALTHB":"IMP3200_CIFVALTHB","CTYOGN":"IMP3200_CTYOGN","WGT":"IMP3200_WGT","WGTUNT":"IMP3200_WGTUNT","QTY":"IMP3200_QTY","QTYUNT":"IMP3200_QTYUNT","POTLDG":"IMP3200_POTLDG","IMPDCLNUM":"IMP3200_IMPDCLNUM","DTELDG":"IMP3200_DTELDG","CMPTAXNUM":"IMP3200_CMPTAXNUM","CMPBRN":"IMP3200_CMPBRN","CMPNME":"IMP3200_CMPNME","CMPNMEENG":"IMP3200_CMPNMEENG","LOAD_TS":"IMP3200_DTETMEAMN"}
+      # ข้อมูลจริงเข้าหลักล้าน record/วัน เก็บทุกอย่างไว้ตลอดกาลไม่ได้ — จำกัดให้ระบบนี้ (ทั้งฝั่ง sync จาก
+      # Oracle และฝั่ง local cache) เก็บแค่ "วันนี้ + เมื่อวาน" ตามปฏิทิน (ไม่ใช่ rolling 48 ชม.) Oracle ต้นทาง
+      # ยังมีข้อมูลเต็มตลอดประวัติศาสตร์เหมือนเดิม อันนี้จำกัดแค่ local ของขา test นี้เท่านั้น (ดู
+      # webapp/pipeline.py RETENTION_DAYS/retention_cutoff/_purge_old_data) ดีฟอลต์เป็น 2 อยู่แล้วถ้าไม่ตั้ง
+      # ก็ได้ ใส่ไว้ให้เห็นชัดว่าปรับได้:
+      - RETENTION_DAYS=2
+      # เอาเฉพาะพิกัด (TRFCLS) ที่ขึ้นต้นด้วย prefix พวกนี้เท่านั้น — เหล็ก (72), ผลิตภัณฑ์เหล็ก (73),
+      # พลาสติก (39) — มีผลทุกรอบ sync ถาวร ไม่ใช่แค่รอบแรก (ดู webapp/pipeline.py TRFCLS_PREFIXES) ไม่ตั้ง
+      # เลย = เอาทุกพิกัดเหมือนเดิม:
+      - TRFCLS_PREFIXES=72,73,39
       # cache ของ multilingual-e5-large ถูกโหลดเข้า volume นี้ไว้ล่วงหน้าแล้ว (จาก hf_cache_e5_large.tar.gz
       # ที่แพ็คมาให้ในโปรเจกต์ — ดู README หัวข้อ "เครื่องออกเน็ตไม่ได้เลย") ไม่ต้องพยายามต่อเน็ตไปเช็ค
       # HuggingFace เลยแม้แต่ครั้งเดียว
