@@ -35,11 +35,11 @@
     <div><label>ตัวชี้วัดที่ใช้เทียบ</label><span>{{ 'ราคาต่อกิโลกรัม' if r.alert_metric == 'price_per_kg' else 'มูลค่ารวม (CIF)' }}</span></div>
     {% endif %}
   </div>
-  {% if r.status == 'red' %}
-  <div class="guard block">🚩 มูลค่าที่สำแดงต่ำกว่า threshold ต่ำของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาต่ำผิดปกติ (Undervalue)</div>
-  {% elif r.status == 'orange' %}
-  <div class="guard warn">🔶 มูลค่าที่สำแดงสูงกว่า threshold สูงของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาสูงผิดปกติ (Overvalue)</div>
-  {% elif r.status == 'green' %}
+  {% if r.alert_status == 'undervalue' %}
+  <div class="guard {{ 'block' if r.status == 'red' else 'warn' }}">{{ '🚩' if r.status == 'red' else '🔶' }} มูลค่าที่สำแดงต่ำกว่า threshold ต่ำของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาต่ำผิดปกติ (Undervalue) ระดับ{{ 'รุนแรง (ส่วนต่างมากกว่า 80%)' if r.status == 'red' else 'ปานกลาง (ส่วนต่าง 50-80%)' }}</div>
+  {% elif r.alert_status == 'overvalue' %}
+  <div class="guard {{ 'block' if r.status == 'red' else 'warn' }}">{{ '🚩' if r.status == 'red' else '🔶' }} มูลค่าที่สำแดงสูงกว่า threshold สูงของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาสูงผิดปกติ (Overvalue) ระดับ{{ 'รุนแรง (ส่วนต่างมากกว่า 80%)' if r.status == 'red' else 'ปานกลาง (ส่วนต่าง 50-80%)' }}</div>
+  {% elif r.alert_status == 'normal' %}
   <div class="guard ok">✓ มูลค่าที่สำแดงอยู่ในช่วงปกติเมื่อเทียบกับกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้)</div>
   {% elif r.status == 'new_cluster' %}
   <div class="guard new">🔵 พิกัดนี้เทรนไว้แล้ว แต่รายการนี้ไม่เข้ากลุ่มใดที่มีสถิติราคาอ้างอิง (อาจเป็นกลุ่มสินค้าใหม่ที่ยังไม่เคยเห็นตอนเทรน) ยังตัดสิน undervalue/overvalue ไม่ได้</div>
@@ -51,7 +51,9 @@
 {% if r.ai_signal %}
 <div class="card">
   <div class="card-h">🚩 สัญญาณที่ AI/ML ตรวจพบ (รายละเอียดเบื้องหลังคะแนนข้างบน)</div>
-  <div class="guard {{ 'block' if r.ai_signal.status == 'undervalue' else ('warn' if r.ai_signal.status == 'overvalue' else 'ok') }}">
+  {# ใช้ r.status (ความรุนแรง) ตัดสิน guard class ไม่ใช่ r.ai_signal.status (ทิศทาง) — กันเคส overvalue/
+     undervalue ที่รุนแรงจริง (>80%) ถูกโชว์เป็น "warn" (เหลือง) ทั้งที่ควรเป็น "block" (แดง) #}
+  <div class="guard {{ 'block' if r.status == 'red' else ('warn' if r.status == 'yellow' else 'ok') }}">
     <strong>{{ r.ai_signal.label }}</strong><br>
     {{ r.ai_signal.detail }}
   </div>

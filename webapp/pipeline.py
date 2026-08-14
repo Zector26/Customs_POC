@@ -76,12 +76,29 @@ ORACLE_DSN = os.environ.get("ORACLE_DSN", "oracle-mock:1521/freepdb1")
 ORACLE_USER = os.environ.get("ORACLE_USER", "system")
 ORACLE_PASSWORD = os.environ.get("ORACLE_PASSWORD", "mock_password_local_only")
 
+# ตาราง/JOIN ที่จะ SELECT จริง (ต่อจากคำว่า FROM) — ดีฟอลต์ตรงกับ oracle-mock (ตาราง DECLARATIONS เดียว)
+# ฝั่ง Oracle จริงข้อมูลอยู่คนละ 2 ตาราง (IMP3000 = หัวใบขน, IMP3200 = รายการสินค้าต่อใบขน คีย์
+# POTLDG+IMPDCLNUM unique อยู่แล้วใน IMP3200 — 1 ใบขนต่อ 1 แถว ไม่ต้อง join แล้วได้หลายแถวซ้อน) เปลี่ยนเป็น
+# Oracle จริงได้โดยตั้ง env var ตัวนี้ ไม่ต้องแก้โค้ด เช่น:
+#   ORACLE_FROM_CLAUSE=IMP3000 JOIN IMP3200 ON IMP3000.POTLDG = IMP3200.POTLDG AND IMP3000.IMPDCLNUM = IMP3200.IMPDCLNUM
+ORACLE_FROM_CLAUSE = os.environ.get("ORACLE_FROM_CLAUSE", "DECLARATIONS")
+
 # ชื่อคอลัมน์ที่ pipeline.py ทั้งไฟล์อ้างถึง (ตรงกับ schema ของ oracle-mock/scripts/seed_oracle_mock.py) —
-# ถ้าตาราง DECLARATIONS ของ Oracle จริงใช้ชื่อคอลัมน์ต่างออกไป (เช่น CUST_DECL_ID แทน DECL_ID) ไม่ต้องแก้
-# query ในโค้ด แค่ตั้ง env var ORACLE_COLUMN_MAP เป็น JSON ของ {ชื่อที่นี่ใช้: ชื่อจริงใน Oracle} เฉพาะ
-# คอลัมน์ที่ชื่อไม่ตรงกัน เช่น '{"DECL_ID": "CUST_DECL_ID", "CIFVALTHB": "INVOICE_VALUE_THB"}' — คอลัมน์ที่
-# ไม่ได้ระบุไว้ถือว่าชื่อตรงกับที่นี่อยู่แล้ว (ดู _load_declarations_from_oracle ใช้ SELECT ... AS ให้ผลลัพธ์
-# ที่ได้กลับมาเป็นชื่อคอลัมน์มาตรฐานนี้เสมอ ไม่กระทบโค้ดส่วนอื่นที่อ่านต่อจากนี้เลย)
+# ถ้า ORACLE_FROM_CLAUSE ชี้ไปตาราง/JOIN ที่ใช้ชื่อคอลัมน์ต่างออกไป (เช่น CUST_DECL_ID แทน DECL_ID หรือ
+# คอลัมน์กระจายอยู่หลายตารางต้อง qualify ด้วยชื่อตาราง) ไม่ต้องแก้ query ในโค้ด แค่ตั้ง env var
+# ORACLE_COLUMN_MAP เป็น JSON ของ {ชื่อที่นี่ใช้: SQL expression จริงที่จะไปแทนใน SELECT ... AS ชื่อนี้} เฉพาะ
+# คอลัมน์ที่ชื่อไม่ตรงกัน เช่น '{"DECL_ID": "CUST_DECL_ID", "CIFVALTHB": "INVOICE_VALUE_THB"}' — ค่าฝั่งขวา
+# เป็น SQL expression เต็มๆก็ได้ ไม่จำกัดแค่ชื่อคอลัมน์เดี่ยว (เช่น DECL_ID ไม่มีอยู่จริงในตาราง IMP3000/
+# IMP3200 เลย ต้องประกอบเองจากคีย์ที่มี: '{"DECL_ID": "IMP3000.POTLDG || \\'-\\' || IMP3000.IMPDCLNUM"}')
+# คอลัมน์ที่ไม่ได้ระบุไว้ถือว่าชื่อตรงกับที่นี่อยู่แล้ว (ดู _load_declarations_from_oracle ใช้ SELECT ... AS
+# ให้ผลลัพธ์ที่ได้กลับมาเป็นชื่อคอลัมน์มาตรฐานนี้เสมอ ไม่กระทบโค้ดส่วนอื่นที่อ่านต่อจากนี้เลย)
+#
+# DECL_ID ไม่มีคอลัมน์ตรงๆใน Oracle จริง (ต่างจาก oracle-mock ที่มี SYS_GUID() ให้) ห้ามปล่อยให้
+# _load_declarations_from_oracle คืนมาโดยไม่มี DECL_ID แล้วให้ db.ingest_dataframe สร้างอัตโนมัติแทน
+# (ดู db._ensure_decl_id) เพราะเลขที่มันสร้างนับใหม่จาก 0 ทุกครั้งที่ sync ไม่ได้อ่านจากแถวที่มีอยู่แล้วใน
+# DuckDB จะไปชนกับ DECL_ID ของรอบ sync ก่อนหน้าทันที แล้ว anti-join กันแถวซ้ำใน _sync_from_oracle จะเข้าใจ
+# ผิดว่าแถวใหม่ "sync ไปแล้ว" (DECL_ID ชนของเก่า) ทิ้งแถวใหม่จริงไปเงียบๆ — ต้องแม็ป DECL_ID เป็น expression
+# ที่ deterministic จากคีย์จริงเสมอ (ดู ตัวอย่าง POTLDG || '-' || IMPDCLNUM ข้างบน ซึ่ง unique อยู่แล้วต่อแถว)
 _ORACLE_SOURCE_COLUMNS = [
     "DECL_ID", "TRFCLS", "GDSDSC", "GDSDSCTH", "CIFVALTHB", "CTYOGN", "WGT", "WGTUNT", "QTY", "QTYUNT",
     "POTLDG", "IMPDCLNUM", "DTELDG", "CMPTAXNUM", "CMPBRN", "CMPNME", "CMPNMEENG", "LOAD_TS",
@@ -178,7 +195,7 @@ def _load_declarations_from_oracle(since_ts: datetime) -> pd.DataFrame:
             trfcls_filter = f"AND ({' OR '.join(conditions)})"
         cur.execute(f"""
             SELECT {select_cols}
-            FROM DECLARATIONS
+            FROM {ORACLE_FROM_CLAUSE}
             WHERE {since_col} > :since_ts
             {trfcls_filter}
         """, params)
@@ -441,21 +458,43 @@ def _system_wide_stats(con) -> dict:
     ต่างจาก n_rows/n_no_model/... ใน summary ของ run() ที่นับแค่ "แถวของ request นี้" (หน้าเดียว หรือ batch
     ที่ poll เจอ) — ตัวเลขนี้ตอบคำถาม "จริงๆแล้วประมวลผล(และเก็บ cache ไว้)กี่แถวในระบบทั้งหมด" ถ้าแถวไหนใน
     declarations ยังไม่เคยถูกเปิดดู/พยากรณ์เลย (เช่น อยู่หน้าอื่นที่ยังไม่มีใครกดไปดู) จะไม่ถูกนับรวมด้วย —
-    ถูกต้องตามความหมายจริงของคำว่า "ประมวลผลแล้ว" ไม่ใช่แค่ "มีอยู่ใน declarations" เฉยๆ"""
+    ถูกต้องตามความหมายจริงของคำว่า "ประมวลผลแล้ว" ไม่ใช่แค่ "มีอยู่ใน declarations" เฉยๆ
+
+    n_green/yellow/red_total คือ "ความรุนแรง" ของส่วนต่างราคา (ไม่ใช่ทิศทาง undervalue/overvalue อีกต่อไป —
+    ดู webapp/main.py._severity) เขียว = ALERT_STATUS='normal' พอดี (deviation < 50% อยู่แล้วโดยนิยาม) เหลือง/
+    แดง คำนวณจาก deviation_pct ที่นี่ตรงๆ (สูตรเดียวกับ webapp/main.py._ai_signal เลือก metric ตาม
+    ALERT_METRIC) เพื่อให้ KPI ที่หน้าเว็บตรงกับสีที่แต่ละแถวโชว์จริง"""
     row = con.execute("""
+        WITH scored AS (
+            SELECT
+                p.NO_REF_REASON, p.ALERT_STATUS,
+                ABS(
+                    CASE
+                        WHEN p.ALERT_METRIC = 'price_per_kg' AND d.WGT_KG IS NOT NULL AND d.WGT_KG > 0
+                             AND p.GROUP_MEAN_PRICE_PER_KG IS NOT NULL AND p.GROUP_MEAN_PRICE_PER_KG > 0
+                            THEN (d.CIFVALTHB / d.WGT_KG) / p.GROUP_MEAN_PRICE_PER_KG * 100
+                        WHEN p.GROUP_MEAN_CIFVALTHB IS NOT NULL AND p.GROUP_MEAN_CIFVALTHB > 0
+                            THEN d.CIFVALTHB / p.GROUP_MEAN_CIFVALTHB * 100
+                        ELSE NULL
+                    END - 100
+                ) AS deviation_pct
+            FROM declarations d
+            JOIN test_predictions p ON d.DECL_ID = p.DECL_ID
+        )
         SELECT
             count(*) AS n_processed_total,
-            sum(CASE WHEN p.NO_REF_REASON = 'no_model' THEN 1 ELSE 0 END) AS n_no_model_total,
-            sum(CASE WHEN p.NO_REF_REASON = 'new_cluster' THEN 1 ELSE 0 END) AS n_new_cluster_total,
-            sum(CASE WHEN p.ALERT_STATUS = 'undervalue' THEN 1 ELSE 0 END) AS n_undervalue_total,
-            sum(CASE WHEN p.ALERT_STATUS = 'overvalue' THEN 1 ELSE 0 END) AS n_overvalue_total,
-            sum(CASE WHEN p.ALERT_STATUS = 'normal' THEN 1 ELSE 0 END) AS n_normal_total
-        FROM declarations d
-        JOIN test_predictions p ON d.DECL_ID = p.DECL_ID
+            sum(CASE WHEN NO_REF_REASON = 'no_model' THEN 1 ELSE 0 END) AS n_no_model_total,
+            sum(CASE WHEN NO_REF_REASON = 'new_cluster' THEN 1 ELSE 0 END) AS n_new_cluster_total,
+            sum(CASE WHEN ALERT_STATUS = 'normal' THEN 1 ELSE 0 END) AS n_green_total,
+            sum(CASE WHEN ALERT_STATUS IN ('undervalue', 'overvalue') AND deviation_pct BETWEEN 50 AND 80
+                     THEN 1 ELSE 0 END) AS n_yellow_total,
+            sum(CASE WHEN ALERT_STATUS IN ('undervalue', 'overvalue') AND deviation_pct > 80
+                     THEN 1 ELSE 0 END) AS n_red_total
+        FROM scored
     """).fetchone()
     cols = [
         "n_processed_total", "n_no_model_total", "n_new_cluster_total",
-        "n_undervalue_total", "n_overvalue_total", "n_normal_total",
+        "n_green_total", "n_yellow_total", "n_red_total",
     ]
     return {c: int(v or 0) for c, v in zip(cols, row)}
 

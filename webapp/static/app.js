@@ -59,11 +59,13 @@ document.getElementById('rows').addEventListener('click',e=>{
 });
 
 // ไล่ประมวลผลทีละ transaction (auto-play) — จำลองว่า transaction เข้ามาให้ระบบตรวจทีละใบ
-const STATUS_LABEL={red:'Undervalue',orange:'Overvalue',green:'Normal',no_model:'No Model',new_cluster:'New Cluster'};
+// สีตอนนี้บอก "ความรุนแรง" ของส่วนต่างราคาอย่างเดียว (ไม่บอกทิศทาง undervalue/overvalue แล้ว — ดูทิศทางได้
+// ตอนเปิดรายละเอียด/drawer แทน — ดู webapp/main.py._severity/_row_view)
+const STATUS_LABEL={red:'แดง',yellow:'เหลือง',green:'เขียว',no_model:'No Model',new_cluster:'New Cluster'};
 const GUARD_MSG={
-  red:'🚩 สงสัยว่าสำแดงราคาต่ำผิดปกติ',
-  orange:'🔶 สงสัยว่าสำแดงราคาสูงผิดปกติ',
-  green:'✓ ไม่พบความผิดปกติ',
+  red:'🚩 แดง',
+  yellow:'🔶 เหลือง',
+  green:'✓ เขียว',
   no_model:'⚪ ยังไม่มีพิกัดนี้ในข้อมูล train',
   new_cluster:'🔵 train แล้ว แต่เจอ cluster ใหม่',
 };
@@ -77,9 +79,9 @@ let idx=0, skipped=false;
 // หน้านี้อาจมีแค่บางส่วนของทั้งระบบ (ดู webapp/main.py, webapp/pipeline.py)
 function updateKpisFromSummary(summary){
   document.getElementById('kpi-total').textContent=summary.n_processed_total;
-  document.getElementById('kpi-red').textContent=summary.n_undervalue_total;
-  document.getElementById('kpi-orange').textContent=summary.n_overvalue_total;
-  document.getElementById('kpi-green').textContent=summary.n_normal_total;
+  document.getElementById('kpi-red').textContent=summary.n_red_total;
+  document.getElementById('kpi-yellow').textContent=summary.n_yellow_total;
+  document.getElementById('kpi-green').textContent=summary.n_green_total;
   document.getElementById('kpi-no_model').textContent=summary.n_no_model_total;
   document.getElementById('kpi-new_cluster').textContent=summary.n_new_cluster_total;
   const allX=document.querySelector('.kpi[data-f="all"] .kpi-x');
@@ -99,6 +101,7 @@ function rowHtml(r){
     <td class="r mono">${r.price_per_kg}</td>
     <td class="r mono">${r.group_mean_kg ?? '-'}</td>
     <td class="l"><div class="tprofile">${r.gdsdscth}</div></td>
+    <td class="r">${r.diff_score === '-' ? '-' : `<span class="score-badge ${r.status}">${r.diff_score}</span>`}</td>
     <td><span class="status ${r.status}">${STATUS_LABEL[r.status]}</span></td>
   </tr>`;
 }

@@ -109,6 +109,19 @@ def _isna(v) -> bool:
     return v is None or (isinstance(v, float) and pd.isna(v))
 
 
+def _severity(pct_of_mean: int) -> str:
+    """คืน 'green'/'yellow'/'red' จากส่วนต่างของราคาที่สำแดงเทียบราคากลาง (|pct_of_mean - 100|) — เขียว
+    ต่ำกว่า 50% (ตรงกับ ALERT_STATUS='normal' พอดีเพราะ PREDICT_ALERT_RATIO=0.5 เดียวกัน), เหลือง 50-80%,
+    แดง มากกว่า 80% — สีนี้บอกแค่ "ความรุนแรง" ของส่วนต่างเท่านั้น ไม่บอกทิศทาง (ต่ำกว่า/สูงกว่าราคากลาง)
+    ทิศทางยังดูได้จาก alert_status/ai_signal/screening_summary ในรายละเอียด (ดู _row_view/_screening_summary)"""
+    deviation = abs(pct_of_mean - 100)
+    if deviation > 80:
+        return "red"
+    if deviation >= 50:
+        return "yellow"
+    return "green"
+
+
 def _ai_signal(r: dict, alert_status: str | None) -> dict | None:
     """สัญญาณผิดปกติที่ตรวจพบ ใช้ metric เดียวกับที่ predict_new_item ใช้ตัดสินจริง (ALERT_METRIC) — คืน
     None ถ้ายังไม่มีค่าเฉลี่ยกลุ่มอ้างอิงเลย (no_model/new_cluster ดู _screening_summary สำหรับ 2 เคสนี้แทน)"""
@@ -147,18 +160,24 @@ def _ai_signal(r: dict, alert_status: str | None) -> dict | None:
 
 
 def _screening_summary(r: dict, alert_status: str | None, signal: dict | None) -> str:
-    """สรุปผลการคัดกรองเป็นข้อความอ่านง่าย 1 ย่อหน้า — ครอบทุกสถานะที่เป็นไปได้ (ดู _row_view/status_label)"""
+    """สรุปผลการคัดกรองเป็นข้อความอ่านง่าย 1 ย่อหน้า — ครอบทุกสถานะที่เป็นไปได้ (ดู _row_view/status_label)
+    บอกทิศทาง (ต่ำกว่า/สูงกว่าราคากลาง) + ความรุนแรงตรงๆในข้อความ ไม่ใช้ชื่อสีมาบอกทิศทางอีกต่อไป (สีที่หน้า
+    list เปลี่ยนไปบอก "ความรุนแรง" อย่างเดียวแล้ว ไม่ผูกกับทิศทาง — ดู _severity/_row_view)"""
     heading = r["HEADING"]
     if signal is not None and alert_status == "undervalue":
+        severity_desc = "อย่างรุนแรง (ส่วนต่างมากกว่า 80% ของราคากลาง)" if _severity(signal["pct_of_mean"]) == "red" \
+            else "อย่างมีนัยสำคัญ (ส่วนต่าง 50-80% ของราคากลาง)"
         return (
-            f"ใบขนสินค้าฉบับนี้ถูกจัดเป็นสถานะสีแดง เนื่องจากระบบตรวจพบว่าราคาที่สำแดงต่ำกว่าค่ากลางของกลุ่มสินค้า"
-            f"พิกัด {heading} อย่างมีนัยสำคัญ (คิดเป็น {signal['pct_of_mean']}% ของราคากลางเท่านั้น) "
+            f"ใบขนสินค้าฉบับนี้ตรวจพบว่าราคาที่สำแดงต่ำกว่าค่ากลางของกลุ่มสินค้า"
+            f"พิกัด {heading} {severity_desc} (คิดเป็น {signal['pct_of_mean']}% ของราคากลางเท่านั้น) "
             "ควรตรวจสอบเอกสารและราคาที่สำแดงเพิ่มเติม"
         )
     if signal is not None and alert_status == "overvalue":
+        severity_desc = "อย่างรุนแรง (ส่วนต่างมากกว่า 80% ของราคากลาง)" if _severity(signal["pct_of_mean"]) == "red" \
+            else "อย่างมีนัยสำคัญ (ส่วนต่าง 50-80% ของราคากลาง)"
         return (
-            f"ใบขนสินค้าฉบับนี้ถูกจัดเป็นสถานะสีส้ม เนื่องจากระบบตรวจพบว่าราคาที่สำแดงสูงกว่าค่ากลางของกลุ่มสินค้า"
-            f"พิกัด {heading} อย่างมีนัยสำคัญ (คิดเป็น {signal['pct_of_mean']}% ของราคากลาง) "
+            f"ใบขนสินค้าฉบับนี้ตรวจพบว่าราคาที่สำแดงสูงกว่าค่ากลางของกลุ่มสินค้า"
+            f"พิกัด {heading} {severity_desc} (คิดเป็น {signal['pct_of_mean']}% ของราคากลาง) "
             "ควรตรวจสอบเอกสารและราคาที่สำแดงเพิ่มเติม"
         )
     if signal is not None and alert_status == "normal":
@@ -175,20 +194,29 @@ def _row_view(r: dict) -> dict:
     """r: แถวจาก pipeline.run() — ALERT_STATUS เป็น 'undervalue' / 'overvalue' / 'normal' / None
     ถ้าเป็น None แยกสาเหตุตาม NO_REF_REASON ต่ออีกที: 'no_model' = พิกัดนี้ยังไม่มีในข้อมูลที่ขา train
     เคยเทรนเลย, 'new_cluster' = เทรนแล้ว แต่รายการนี้ไม่เข้ากลุ่มใดที่มีสถิติราคาอ้างอิง (noise/กลุ่มใหม่
-    ที่ยังไม่เคยเห็นตอนเทรน)"""
+    ที่ยังไม่เคยเห็นตอนเทรน)
+
+    status/status_label ของแถวที่มีค่าเฉลี่ยกลุ่มอ้างอิง (undervalue/overvalue/normal) มาจาก "ความรุนแรง" ของ
+    ส่วนต่างราคา (green/yellow/red — ดู _severity) ไม่ใช่ทิศทาง (ต่ำกว่า/สูงกว่าราคากลาง) เหมือนเดิมอีกต่อไป —
+    ทิศทางยังส่งออกไปเป็น alert_status ตรงๆ ให้ template ใช้แยกข้อความตอนเปิดรายละเอียด (drawer) ได้ (ดู
+    webapp/templates/detail.html)"""
     alert_status = r["ALERT_STATUS"]
-    if alert_status == "undervalue":
-        status, status_label = "red", "สำแดงราคาต่ำผิดปกติ (Undervalue)"
-    elif alert_status == "overvalue":
-        status, status_label = "orange", "สำแดงราคาสูงผิดปกติ (Overvalue)"
-    elif alert_status == "normal":
-        status, status_label = "green", "ไม่พบความผิดปกติ (Normal)"
+    ai_signal = _ai_signal(r, alert_status)
+    screening_summary = _screening_summary(r, alert_status, ai_signal)
+
+    # คะแนนความต่าง — ส่วนต่าง % ของราคาที่สำแดงเทียบราคากลาง (|pct_of_mean - 100|) ตัวเดียวกับที่ _severity
+    # ใช้ตัดสิน green/yellow/red เป๊ะ โชว์เป็นคอลัมน์แยกในตาราง (ก่อนคอลัมน์สถานะ) ให้เห็นตัวเลขจริงที่ทำให้
+    # ได้สถานะนั้น ไม่ต้องเดาจากสีเปล่าๆ — ไม่ใส่ % (แค่ตัวเลข ดู webapp/static/app.js .score-badge)
+    diff_score = f"{abs(ai_signal['pct_of_mean'] - 100)}" if ai_signal else "-"
+
+    if alert_status in ("undervalue", "overvalue", "normal"):
+        severity = _severity(ai_signal["pct_of_mean"]) if ai_signal else "green"
+        status = severity
+        status_label = {"green": "เขียว", "yellow": "เหลือง", "red": "แดง"}[severity]
     elif r["NO_REF_REASON"] == "new_cluster":
         status, status_label = "new_cluster", "เทรนแล้ว พบ Cluster ใหม่ (New Cluster)"
     else:
         status, status_label = "no_model", "ยังไม่มีพิกัดนี้ในข้อมูล Train (No Model)"
-    ai_signal = _ai_signal(r, alert_status)
-    screening_summary = _screening_summary(r, alert_status, ai_signal)
     return {
         "decl_id": r["DECL_ID"],
         "decl_no": f"{r['POTLDG']}-{r['IMPDCLNUM']}",
@@ -202,6 +230,10 @@ def _row_view(r: dict) -> dict:
         "heading": r["HEADING"],
         "status": status,
         "status_label": status_label,
+        "diff_score": diff_score,
+        # ทิศทาง (undervalue/overvalue/normal/None) แยกจาก status (ความรุนแรง) — ให้ detail.html ใช้บอก
+        # ทิศทางในข้อความ guard block ได้ (ดู docstring ข้างบน)
+        "alert_status": alert_status,
         "gdsdsc": r["GDSDSC"], "gdsdscth": r["GDSDSCTH"],
         "tax": r["CMPTAXNUM"], "brn": r["CMPBRN"],
         "qty": f"{r['QTY']:,.0f} {r['QTYUNT']}" if not _isna(r["QTY"]) else "-",
