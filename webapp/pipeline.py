@@ -68,6 +68,15 @@ from clustering_core import (
     predict_new_item,
 )
 
+# oracledb (thin mode, default) ปฏิเสธ user บาง Oracle จริงที่เก็บรหัสผ่านด้วย password verifier แบบเก่า
+# (พบจริง: DPY-3015 "password verifier type 0x939 is not supported ... in thin mode" — verifier ยุค
+# 10g/11g) ต้องสลับไป thick mode (ผ่าน Oracle Instant Client) ถึงจะต่อได้ — ทำแบบ opt-in ผ่าน env var
+# เดียว ไม่ตั้งเลย (ค่า default, ใช้กับ oracle-mock ที่เป็น verifier ใหม่อยู่แล้ว) ยังเป็น thin mode ตามปกติ
+# ต้องเรียกครั้งเดียวก่อน oracledb.connect() ครั้งแรกเท่านั้น ดู Dockerfile สำหรับที่มาของไฟล์ instant client
+_ORACLE_CLIENT_LIB_DIR = os.environ.get("ORACLE_CLIENT_LIB_DIR")
+if _ORACLE_CLIENT_LIB_DIR:
+    oracledb.init_oracle_client(lib_dir=_ORACLE_CLIENT_LIB_DIR)
+
 _MODEL_CACHE: dict[str, tuple] = {}  # heading -> (mtime, model_obj, group_stats, params, pca, viz_df)
 
 # ค่า default ตรงกับ oracle-mock service ใน docker-compose.yml (ดู scripts/seed_oracle_mock.py) — เปลี่ยน

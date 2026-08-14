@@ -12,3 +12,9 @@ seed_data/*.xlsx
 *.tar.gz
 webapp/fixtures/*.csv
 webapp/fixtures/*.xlsx
+
+# Oracle Instant Client — ไฟล์ binary มีสัญญาอนุญาตของ Oracle เอง โหลดจาก
+# https://www.oracle.com/database/technologies/instant-client/downloads.html ตอน deploy เอง ไม่เก็บเข้า git
+# (ดู Dockerfile) เก็บแค่ .gitkeep ไว้ให้โฟลเดอร์มีอยู่เสมอ ไม่งั้น COPY ใน Dockerfile จะหาไม่เจอ
+oracle_instantclient/*
+!oracle_instantclient/.gitkeep

@@ -14,11 +14,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# libgomp1 จำเป็นสำหรับ scikit-learn/umap (OpenMP) บน debian slim image
+# libgomp1 จำเป็นสำหรับ scikit-learn/umap (OpenMP) บน debian slim image — libaio1(t64) จำเป็นสำหรับ Oracle
+# Instant Client (thick mode ของ python-oracledb ดู webapp/pipeline.py ตรง oracledb.init_oracle_client)
+# ชื่อ package เปลี่ยนเป็น libaio1t64 บน Debian รุ่นใหม่ (trixie, time_t 64-bit transition) แต่ยังชื่อ
+# libaio1 บนรุ่นเก่า/distro อื่น เลยลองชื่อใหม่ก่อนแล้ว fallback ไปชื่อเก่าถ้าไม่มี
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libgomp1 \
+    && (apt-get install -y --no-install-recommends libaio1t64 || apt-get install -y --no-install-recommends libaio1) \
     && rm -rf /var/lib/apt/lists/*
+
+# Oracle Instant Client (Basic Light พอ) — วางไฟล์ที่โหลดมาจาก
+# https://www.oracle.com/database/technologies/instant-client/downloads.html (เลือก Linux x86-64, ต้อง
+# กดยอมรับ license เอง โหลดจากเครื่องที่มีเน็ตแล้ว transfer มา เครื่องนี้ออกเน็ตไม่ได้) ไว้ในโฟลเดอร์
+# oracle_instantclient/ ของ repo นี้ก่อน build (มีแค่ .gitkeep เป็น placeholder ไว้ ถ้ายังไม่ได้ใส่ไฟล์จริง
+# COPY นี้จะไม่ error แต่ thick mode จะยัง init ไม่ได้จนกว่าจะมีไฟล์ .so จริงอยู่ข้างใน)
+COPY oracle_instantclient/ /opt/oracle/instantclient/
+RUN echo "/opt/oracle/instantclient" > /etc/ld.so.conf.d/oracle-instantclient.conf && ldconfig
 
 COPY requirements.txt .
 # --default-timeout/--retries: ทนต่อ network ที่ช้า/ไม่แน่นอนตอน build
