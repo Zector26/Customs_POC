@@ -17,12 +17,19 @@ WORKDIR /app
 # libgomp1 จำเป็นสำหรับ scikit-learn/umap (OpenMP) บน debian slim image — libaio1(t64) จำเป็นสำหรับ Oracle
 # Instant Client (thick mode ของ python-oracledb ดู webapp/pipeline.py ตรง oracledb.init_oracle_client)
 # ชื่อ package เปลี่ยนเป็น libaio1t64 บน Debian รุ่นใหม่ (trixie, time_t 64-bit transition) แต่ยังชื่อ
-# libaio1 บนรุ่นเก่า/distro อื่น เลยลองชื่อใหม่ก่อนแล้ว fallback ไปชื่อเก่าถ้าไม่มี
+# libaio1 บนรุ่นเก่า/distro อื่น เลยลองชื่อใหม่ก่อนแล้ว fallback ไปชื่อเก่าถ้าไม่มี — แพ็กเกจ libaio1t64 เอง
+# ให้ไฟล์จริงชื่อ libaio.so.1t64 (ไม่ใช่ libaio.so.1 แบบเดิม) แต่ Oracle Instant Client ฝัง DT_NEEDED เรียก
+# ชื่อเดิม libaio.so.1 ตรงๆ เลยต้องสร้าง compat symlink ชื่อเก่าไปชื่อใหม่เพิ่มเอง (เฉพาะกรณีที่เจอ .1t64
+# แต่ยังไม่มีชื่อเดิมอยู่ก่อน — บน distro เก่าที่มี libaio1 ตรงชื่ออยู่แล้วจะไม่เข้าเงื่อนไขนี้)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libgomp1 \
     && (apt-get install -y --no-install-recommends libaio1t64 || apt-get install -y --no-install-recommends libaio1) \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && if [ -e /usr/lib/x86_64-linux-gnu/libaio.so.1t64 ] && [ ! -e /usr/lib/x86_64-linux-gnu/libaio.so.1 ]; then \
+         ln -s libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1; \
+       fi \
+    && ldconfig
 
 # Oracle Instant Client (Basic Light พอ) — วางไฟล์ที่โหลดมาจาก
 # https://www.oracle.com/database/technologies/instant-client/downloads.html (เลือก Linux x86-64, ต้อง
