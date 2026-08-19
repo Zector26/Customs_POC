@@ -1,0 +1,54 @@
+# Override สำหรับรันบนเครื่องที่มี NVIDIA GPU — ใช้คู่กับ docker-compose.yml เสมอ ห้ามใช้เดี่ยวๆ:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d
+#
+# ทำ 3 อย่างที่ไฟล์หลักทำแทนไม่ได้:
+#   1. build arg TORCH_INDEX_URL — ให้ pip ดึง torch แบบ CUDA แทน CPU-only ที่เป็นดีฟอลต์ (ดู Dockerfile)
+#      ต้องตั้ง cuXXX ให้เข้ากับ NVIDIA driver ของเครื่อง เช็คด้วย `nvidia-smi` ดูบรรทัด "CUDA Version"
+#      driver ที่รองรับ CUDA 12.x ขึ้นไป (>= 525) ใช้ cu124 ได้แน่นอน (safe default) — driver ใหม่กว่า
+#      (>= 570) เปลี่ยนเป็น cu128 ได้ถ้าอยากได้ kernel ใหม่กว่า
+#   2. จอง GPU ให้ container จริง (ไม่จองก็มองไม่เห็นการ์ดเลยแม้จะติดตั้ง toolkit ไว้แล้ว)
+#   3. ปิด offline mode ของ HuggingFace ในขา test — ไฟล์หลักตั้ง HF_HUB_OFFLINE=1 ไว้สำหรับเครื่อง
+#      production ที่ออกเน็ตไม่ได้ ซึ่งจะพังทันทีบนเครื่องใหม่ที่ volume customs-hf-cache ยังว่างอยู่
+#
+# ไม่ได้แก้โค้ด Python เลย — clustering_core.load_embedder() เรียก SentenceTransformer() เปล่าๆ
+# sentence-transformers auto-detect เจอ CUDA แล้วย้ายโมเดลขึ้น GPU ให้เอง
+#
+# **VRAM**: ทั้ง 2 ขาโหลด intfloat/multilingual-e5-large คนละชุด (~2.2GB fp32 ต่อ process) รวมกับ
+# workspace ของ torch แล้วต้องมี VRAM ว่างราว 6GB ถ้าการ์ดเล็กกว่านั้น ให้ลบ block deploy: ของ service
+# ที่ไม่ได้ใช้ออก (ปกติเก็บไว้ที่ app = ขา train ซึ่งได้ประโยชน์จาก GPU มากที่สุดเพราะ batch 256 —
+# ขา test encode ทีละ 1 ข้อความต่อแถว ใช้ GPU ได้ไม่เต็มอยู่แล้ว)
+
+services:
+  # ขา train — ที่ GPU คุ้มที่สุด (compute_embeddings batch 256 ต่อรอบ ดู clustering_core.py)
+  app:
+    build:
+      context: .
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu124
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ขา test — ได้ประโยชน์น้อยกว่า (encode ทีละแถว + UMAP/HDBSCAN ยังอยู่บน CPU) แต่ใส่ไว้ให้ 2 ขาใช้
+  # torch build เดียวกัน ไม่ให้ image ต่างกันโดยไม่จำเป็น
+  webapp:
+    build:
+      context: .
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu124
+    environment:
+      # เครื่องทดลองออกเน็ตได้ + volume ยังว่าง — ต้องปล่อยให้โหลดโมเดลจาก HuggingFace ได้รอบแรก
+      # (ไฟล์หลักตั้งเป็น 1 ไว้สำหรับเครื่อง production ที่ออกเน็ตไม่ได้)
+      - HF_HUB_OFFLINE=0
+      - TRANSFORMERS_OFFLINE=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

@@ -41,8 +41,13 @@ RUN echo "/opt/oracle/instantclient" > /etc/ld.so.conf.d/oracle-instantclient.co
 
 COPY requirements.txt .
 # --default-timeout/--retries: ทนต่อ network ที่ช้า/ไม่แน่นอนตอน build
-# ติดตั้ง torch แบบ CPU-only ก่อน แทนที่จะให้ pip ดึง CUDA wheel ขนาดหลาย GB มาโดยไม่ได้ใช้
-RUN pip install --default-timeout=180 --retries 5 --index-url https://download.pytorch.org/whl/cpu torch \
+# ดีฟอลต์ติดตั้ง torch แบบ CPU-only แทนที่จะให้ pip ดึง CUDA wheel ขนาดหลาย GB มาโดยไม่ได้ใช้ — เครื่องที่มี
+# NVIDIA GPU จริงให้ override เป็น channel cuXXX ตอน build (ดู docker-compose.gpu.yml) ไม่ต้องแก้ไฟล์นี้:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml build
+# โค้ดฝั่ง Python ไม่ต้องแก้อะไรเลย — clustering_core.load_embedder() เรียก SentenceTransformer() เปล่าๆ
+# ซึ่ง auto-detect เจอ CUDA แล้วย้ายโมเดลขึ้น GPU ให้เอง
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+RUN pip install --default-timeout=180 --retries 5 --index-url ${TORCH_INDEX_URL} torch \
     && pip install --default-timeout=180 --retries 5 -r requirements.txt
 
 COPY . .

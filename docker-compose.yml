@@ -36,6 +36,8 @@ services:
       - customs-hf-cache:/app/.cache/huggingface
       - ./seed_data:/app/seed_data:ro   # วางไฟล์ข้อมูลเริ่มต้น (.csv/.xlsx) ไว้ในโฟลเดอร์นี้บน host
     environment:
+      # ตั้งให้ตรงกับขา test (ดู service webapp) — ไม่ให้ 2 ขาบันทึกเวลาคนละ tz กันบนโมเดล/ผลชุดเดียวกัน
+      - TZ=Asia/Bangkok
       - DATA_PATH=/app/seed_data/input.xlsx   # เปลี่ยนชื่อไฟล์ให้ตรงกับที่วางจริงใน ./seed_data
       # - DATA_SHEET=Sheet1                          # ถ้าไฟล์เป็น .xlsx และไม่ใช่ sheet แรก
       # - FORCE_RETRAIN=1                            # บังคับ ingest+เทรนใหม่ทุกครั้งที่ container start
@@ -67,6 +69,14 @@ services:
       - customs-models:/app/models:ro              # โมเดล/สถิติราคาที่ขา train เทรนไว้แล้ว (อ่านอย่างเดียว)
       - customs-hf-cache:/app/.cache/huggingface   # ใช้ cache โมเดล embedding ร่วมกับขา train (ไม่โหลดซ้ำ)
     environment:
+      # ต้องตรงกับ timezone ของ Oracle ต้นทาง — base image python:3.11-slim เป็น UTC ถ้าไม่ตั้งอะไร
+      # LOAD_TS ใน sync_log เป็น naive timestamp (ไม่มี tz) แต่ค่าที่ใส่มาจาก 2 แหล่ง: แถวที่ sync มาจาก
+      # Oracle ใช้เวลาของ Oracle server (ไทย) ส่วนแถวที่ใส่จากในคอนเทนเนอร์ (เช่น
+      # scripts/insert_test_duckdb.py) ใช้ datetime.now() ของคอนเทนเนอร์ ถ้าคนละ tz ค่าจะเทียบกันไม่ได้
+      # — เจอจริง: แถวที่ใส่ตอนบ่าย (07:0x UTC) ดู "เก่ากว่า" แถว Oracle (10:22 ไทย) ทำให้
+      # /api/poll ที่กรอง `WHERE LOAD_TS > :since` ไม่เห็นแถวใหม่นั้นตลอดไป
+      # มีผลกับ retention_cutoff() ด้วย (ดู webapp/pipeline.py) ซึ่งคำนวณเที่ยงคืนจาก datetime.now()
+      - TZ=Asia/Bangkok
       # ค่า default ตรงกับ service oracle-mock ในไฟล์นี้อยู่แล้ว (ดู webapp/pipeline.py) — เปลี่ยนให้ต่อ
       # Oracle จริงแทนได้โดยตั้ง 3 ตัวนี้ ไม่ต้องแก้โค้ด
       - ORACLE_DSN=oracle-mock:1521/freepdb1
