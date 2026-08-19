@@ -27,9 +27,9 @@
 
 <div class="kpis">
   <div class="kpi" data-f="all"><div class="kpi-n" id="kpi-total">{{ run.n_processed_total }}</div><div class="kpi-l">ประมวลผลแล้ว</div><div class="kpi-x">จาก {{ total }} รายการ</div></div>
-  <div class="kpi green" data-f="green"><div class="kpi-n" id="kpi-green">{{ run.n_green_total }}</div><div class="kpi-l">เขียว</div><div class="kpi-x">ไม่พบความผิดปกติ</div></div>
-  <div class="kpi yellow" data-f="yellow"><div class="kpi-n" id="kpi-yellow">{{ run.n_yellow_total }}</div><div class="kpi-l">เหลือง</div><div class="kpi-x">ส่วนต่างราคา 50-80%</div></div>
-  <div class="kpi red" data-f="red"><div class="kpi-n" id="kpi-red">{{ run.n_red_total }}</div><div class="kpi-l">แดง</div><div class="kpi-x">ส่วนต่างราคามากกว่า 80%</div></div>
+  <div class="kpi green" data-f="green"><div class="kpi-n" id="kpi-green">{{ run.n_green_total }}</div><div class="kpi-l">เขียว</div><div class="kpi-x">คะแนนความเสี่ยง 0-45</div></div>
+  <div class="kpi yellow" data-f="yellow"><div class="kpi-n" id="kpi-yellow">{{ run.n_yellow_total }}</div><div class="kpi-l">เหลือง</div><div class="kpi-x">คะแนนความเสี่ยง 46-75</div></div>
+  <div class="kpi red" data-f="red"><div class="kpi-n" id="kpi-red">{{ run.n_red_total }}</div><div class="kpi-l">แดง</div><div class="kpi-x">คะแนนความเสี่ยง 76-100</div></div>
   <div class="kpi no_model" data-f="no_model"><div class="kpi-n" id="kpi-no_model">{{ run.n_no_model_total }}</div><div class="kpi-l">No Model</div><div class="kpi-x">ยังไม่มีพิกัดนี้ในข้อมูล train</div></div>
   <div class="kpi new_cluster" data-f="new_cluster"><div class="kpi-n" id="kpi-new_cluster">{{ run.n_new_cluster_total }}</div><div class="kpi-l">New Cluster</div><div class="kpi-x">train แล้ว แต่เจอ cluster ใหม่</div></div>
 </div>
@@ -71,7 +71,7 @@
   <th>เลขที่ใบขนสินค้า</th><th>วันที่ผ่านพิธีการ</th><th>ประเภท</th><th class="l">ผู้นำเข้า</th>
   <th>พิกัดศุลกากร</th><th class="r">ราคาต่อน้ำหนัก (บาท/กก.)</th>
   <th class="r">ราคาเฉลี่ยต่อน้ำหนักของกลุ่ม (บาท/กก.)</th><th class="l">คำบรรยาย (ไทย)</th>
-  <th class="r">คะแนนความต่างของราคา</th><th>สถานะ</th>
+  <th class="r">คะแนนความเสี่ยง (0-100)</th><th>สถานะ</th>
 </tr>
 </thead>
 <tbody id="rows"></tbody>

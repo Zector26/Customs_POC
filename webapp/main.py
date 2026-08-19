@@ -33,7 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from clustering_core import load_embedder
-from webapp import pipeline
+from webapp import pipeline, risk
 
 BASE = pathlib.Path(__file__).resolve().parent
 
@@ -109,31 +109,17 @@ def _isna(v) -> bool:
     return v is None or (isinstance(v, float) and pd.isna(v))
 
 
-def _severity(pct_of_mean: int) -> str:
-    """คืน 'green'/'yellow'/'red' จากส่วนต่างของราคาที่สำแดงเทียบราคากลาง (|pct_of_mean - 100|) — เขียว
-    ต่ำกว่า 50% (ตรงกับ ALERT_STATUS='normal' พอดีเพราะ PREDICT_ALERT_RATIO=0.5 เดียวกัน), เหลือง 50-80%,
-    แดง มากกว่า 80% — สีนี้บอกแค่ "ความรุนแรง" ของส่วนต่างเท่านั้น ไม่บอกทิศทาง (ต่ำกว่า/สูงกว่าราคากลาง)
-    ทิศทางยังดูได้จาก alert_status/ai_signal/screening_summary ในรายละเอียด (ดู _row_view/_screening_summary)"""
-    deviation = abs(pct_of_mean - 100)
-    if deviation > 80:
-        return "red"
-    if deviation >= 50:
-        return "yellow"
-    return "green"
-
-
 def _ai_signal(r: dict, alert_status: str | None) -> dict | None:
     """สัญญาณผิดปกติที่ตรวจพบ ใช้ metric เดียวกับที่ predict_new_item ใช้ตัดสินจริง (ALERT_METRIC) — คืน
-    None ถ้ายังไม่มีค่าเฉลี่ยกลุ่มอ้างอิงเลย (no_model/new_cluster ดู _screening_summary สำหรับ 2 เคสนี้แทน)"""
+    None ถ้ายังไม่มีค่าเฉลี่ยกลุ่มอ้างอิงเลย (no_model/new_cluster ดู _screening_summary สำหรับ 2 เคสนี้แทน)
+    ตัวเลขที่ใช้ (ค่าที่สำแดง/ค่าเฉลี่ยกลุ่ม/% ของค่าเฉลี่ย) มาจาก risk.metric_view() ที่เดียวกับที่ชั้นให้
+    คะแนนความเสี่ยงใช้คิดคะแนนจริง ห้ามคำนวณเองซ้ำที่นี่ ไม่งั้นเลขที่โชว์กับเลขที่คิดคะแนนจะเพี้ยนออกจากกัน"""
     if alert_status not in ("undervalue", "overvalue", "normal"):
         return None
-    if r["ALERT_METRIC"] == "price_per_kg":
-        value, mean, unit = r["CIFVALTHB"] / r["WGT_KG"], r["GROUP_MEAN_PRICE_PER_KG"], "บาท/กก."
-    else:
-        value, mean, unit = r["CIFVALTHB"], r["GROUP_MEAN_CIFVALTHB"], "บาท"
-    if _isna(mean) or not mean:
+    mv = risk.metric_view(r)
+    if mv is None:
         return None
-    pct_of_mean = round(value / mean * 100)
+    value, mean, unit, pct_of_mean = mv["value"], mv["mean"], mv["unit"], mv["pct_of_mean"]
     heading = r["HEADING"]
 
     if alert_status == "undervalue":
@@ -159,26 +145,24 @@ def _ai_signal(r: dict, alert_status: str | None) -> dict | None:
     return {"status": alert_status, "label": label, "detail": detail, "pct_of_mean": pct_of_mean}
 
 
-def _screening_summary(r: dict, alert_status: str | None, signal: dict | None) -> str:
+def _screening_summary(r: dict, alert_status: str | None, signal: dict | None, assessment: dict) -> str:
     """สรุปผลการคัดกรองเป็นข้อความอ่านง่าย 1 ย่อหน้า — ครอบทุกสถานะที่เป็นไปได้ (ดู _row_view/status_label)
-    บอกทิศทาง (ต่ำกว่า/สูงกว่าราคากลาง) + ความรุนแรงตรงๆในข้อความ ไม่ใช้ชื่อสีมาบอกทิศทางอีกต่อไป (สีที่หน้า
-    list เปลี่ยนไปบอก "ความรุนแรง" อย่างเดียวแล้ว ไม่ผูกกับทิศทาง — ดู _severity/_row_view)"""
+    บอกทิศทาง (ต่ำกว่า/สูงกว่าราคากลาง) + คะแนนความเสี่ยงที่ได้ตรงๆในข้อความ ไม่ใช้ชื่อสีมาบอกทิศทาง (สีที่หน้า
+    list บอก "ระดับความเสี่ยง" อย่างเดียว ไม่ผูกกับทิศทาง — ดู webapp/risk.py/_row_view)"""
     heading = r["HEADING"]
-    if signal is not None and alert_status == "undervalue":
-        severity_desc = "อย่างรุนแรง (ส่วนต่างมากกว่า 80% ของราคากลาง)" if _severity(signal["pct_of_mean"]) == "red" \
-            else "อย่างมีนัยสำคัญ (ส่วนต่าง 50-80% ของราคากลาง)"
-        return (
-            f"ใบขนสินค้าฉบับนี้ตรวจพบว่าราคาที่สำแดงต่ำกว่าค่ากลางของกลุ่มสินค้า"
-            f"พิกัด {heading} {severity_desc} (คิดเป็น {signal['pct_of_mean']}% ของราคากลางเท่านั้น) "
-            "ควรตรวจสอบเอกสารและราคาที่สำแดงเพิ่มเติม"
+    if signal is not None and alert_status in ("undervalue", "overvalue"):
+        side = "ต่ำกว่า" if alert_status == "undervalue" else "สูงกว่า"
+        action = (
+            "ควรจัดลำดับตรวจสอบเอกสารและราคาที่สำแดงเป็นลำดับต้น" if assessment["tier"] == "red"
+            else "ควรตรวจสอบเอกสารและราคาที่สำแดงเพิ่มเติม" if assessment["tier"] == "yellow"
+            else "แต่คะแนนความเสี่ยงรวมยังอยู่ระดับต่ำ (ส่วนต่างเป็นเงินไม่สูง และ/หรือฐานราคาอ้างอิงของกลุ่ม"
+                 "ยังไม่หนักแน่นพอ) จึงยังไม่ใช่ลำดับต้นที่ต้องตรวจ"
         )
-    if signal is not None and alert_status == "overvalue":
-        severity_desc = "อย่างรุนแรง (ส่วนต่างมากกว่า 80% ของราคากลาง)" if _severity(signal["pct_of_mean"]) == "red" \
-            else "อย่างมีนัยสำคัญ (ส่วนต่าง 50-80% ของราคากลาง)"
         return (
-            f"ใบขนสินค้าฉบับนี้ตรวจพบว่าราคาที่สำแดงสูงกว่าค่ากลางของกลุ่มสินค้า"
-            f"พิกัด {heading} {severity_desc} (คิดเป็น {signal['pct_of_mean']}% ของราคากลาง) "
-            "ควรตรวจสอบเอกสารและราคาที่สำแดงเพิ่มเติม"
+            f"ใบขนสินค้าฉบับนี้ตรวจพบว่าราคาที่สำแดง{side}ค่ากลางของกลุ่มสินค้าพิกัด {heading} "
+            f"{assessment['deviation_pct']}% (คิดเป็น {signal['pct_of_mean']}% ของราคากลาง) "
+            f"ส่วนต่างมูลค่า {assessment['value_gap_thb']:,.0f} บาท — คะแนนความเสี่ยงรวม "
+            f"{assessment['score']}/100 ({assessment['tier_label']}) {action}"
         )
     if signal is not None and alert_status == "normal":
         return f"ใบขนสินค้าฉบับนี้ผ่านการตรวจสอบ ราคาที่สำแดงอยู่ในช่วงปกติเมื่อเทียบกับกลุ่มสินค้าพิกัด {heading}"
@@ -196,27 +180,28 @@ def _row_view(r: dict) -> dict:
     เคยเทรนเลย, 'new_cluster' = เทรนแล้ว แต่รายการนี้ไม่เข้ากลุ่มใดที่มีสถิติราคาอ้างอิง (noise/กลุ่มใหม่
     ที่ยังไม่เคยเห็นตอนเทรน)
 
-    status/status_label ของแถวที่มีค่าเฉลี่ยกลุ่มอ้างอิง (undervalue/overvalue/normal) มาจาก "ความรุนแรง" ของ
-    ส่วนต่างราคา (green/yellow/red — ดู _severity) ไม่ใช่ทิศทาง (ต่ำกว่า/สูงกว่าราคากลาง) เหมือนเดิมอีกต่อไป —
-    ทิศทางยังส่งออกไปเป็น alert_status ตรงๆ ให้ template ใช้แยกข้อความตอนเปิดรายละเอียด (drawer) ได้ (ดู
+    status/status_label ของแถวที่มีค่าเฉลี่ยกลุ่มอ้างอิง (undervalue/overvalue/normal) มาจาก "คะแนนความเสี่ยง"
+    0-100 ที่ชั้น risk scoring คิดให้ (0-45 เขียว / 46-75 เหลือง / 76-100 แดง — ดู webapp/risk.py) ไม่ใช่ทิศทาง
+    (ต่ำกว่า/สูงกว่าราคากลาง) และไม่ใช่ |ส่วนต่าง %| เปล่าๆเหมือนเดิมอีกต่อไป — ทิศทางยังส่งออกไปเป็น
+    alert_status ตรงๆ ให้ template ใช้แยกข้อความตอนเปิดรายละเอียด (drawer) ได้ (ดู
     webapp/templates/detail.html)"""
     alert_status = r["ALERT_STATUS"]
     ai_signal = _ai_signal(r, alert_status)
-    screening_summary = _screening_summary(r, alert_status, ai_signal)
+    # คิดคะแนนจาก input ในแถวนี้ตรงๆ (pure function) ไม่ได้อ่านคอลัมน์ RISK_SCORE/RISK_TIER ที่ persist ไว้ —
+    # คะแนนกับรายละเอียดการแจกแจงคะแนนที่โชว์บนหน้าเว็บจึงมาจากการคำนวณครั้งเดียวกันเสมอ (คอลัมน์ที่ persist
+    # ไว้มีหน้าที่เดียวคือให้ SQL นับ KPI ทั้งระบบได้ — ดู pipeline._system_wide_stats — และถูก refresh ให้ตรง
+    # เวอร์ชันสูตรก่อนถึงมือ route นี้อยู่แล้ว ดู pipeline._ensure_predicted)
+    assessment = risk.assess(r)
+    screening_summary = _screening_summary(r, alert_status, ai_signal, assessment)
 
-    # คะแนนความต่าง — ส่วนต่าง % ของราคาที่สำแดงเทียบราคากลาง (|pct_of_mean - 100|) ตัวเดียวกับที่ _severity
-    # ใช้ตัดสิน green/yellow/red เป๊ะ โชว์เป็นคอลัมน์แยกในตาราง (ก่อนคอลัมน์สถานะ) ให้เห็นตัวเลขจริงที่ทำให้
-    # ได้สถานะนั้น ไม่ต้องเดาจากสีเปล่าๆ — ไม่ใส่ % (แค่ตัวเลข ดู webapp/static/app.js .score-badge)
-    diff_score = f"{abs(ai_signal['pct_of_mean'] - 100)}" if ai_signal else "-"
-
-    if alert_status in ("undervalue", "overvalue", "normal"):
-        severity = _severity(ai_signal["pct_of_mean"]) if ai_signal else "green"
-        status = severity
-        status_label = {"green": "เขียว", "yellow": "เหลือง", "red": "แดง"}[severity]
-    elif r["NO_REF_REASON"] == "new_cluster":
-        status, status_label = "new_cluster", "เทรนแล้ว พบ Cluster ใหม่ (New Cluster)"
-    else:
-        status, status_label = "no_model", "ยังไม่มีพิกัดนี้ในข้อมูล Train (No Model)"
+    status = assessment["tier"]
+    status_label = {
+        "green": "เขียว (ความเสี่ยงต่ำ)",
+        "yellow": "เหลือง (ความเสี่ยงปานกลาง)",
+        "red": "แดง (ความเสี่ยงสูง)",
+        "new_cluster": "เทรนแล้ว พบ Cluster ใหม่ (New Cluster)",
+        "no_model": "ยังไม่มีพิกัดนี้ในข้อมูล Train (No Model)",
+    }[status]
     return {
         "decl_id": r["DECL_ID"],
         "decl_no": f"{r['POTLDG']}-{r['IMPDCLNUM']}",
@@ -230,7 +215,12 @@ def _row_view(r: dict) -> dict:
         "heading": r["HEADING"],
         "status": status,
         "status_label": status_label,
-        "diff_score": diff_score,
+        # คะแนนความเสี่ยง 0-100 โชว์เป็นคอลัมน์แยกในตาราง (ก่อนคอลัมน์สถานะ) ให้เห็นตัวเลขจริงที่ทำให้ได้สีนั้น
+        # ไม่ต้องเดาจากสีเปล่าๆ — เป็น string เพราะแถวที่ประเมินไม่ได้ (no_model/new_cluster) ไม่มีคะแนน โชว์ "-"
+        "risk_score": str(assessment["score"]) if assessment["score"] is not None else "-",
+        # รายละเอียดที่มาของคะแนน (ปัจจัยบวกคะแนน + ตัวคูณความเชื่อมั่น) ให้ drawer แจกแจงให้เจ้าหน้าที่เห็นว่า
+        # คะแนนมาจากอะไร ตรวจย้อนได้ ไม่ใช่เลขลอยๆจากโมเดล (ดู webapp/templates/detail.html)
+        "risk": assessment,
         # ทิศทาง (undervalue/overvalue/normal/None) แยกจาก status (ความรุนแรง) — ให้ detail.html ใช้บอก
         # ทิศทางในข้อความ guard block ได้ (ดู docstring ข้างบน)
         "alert_status": alert_status,

@@ -59,13 +59,14 @@ document.getElementById('rows').addEventListener('click',e=>{
 });
 
 // ไล่ประมวลผลทีละ transaction (auto-play) — จำลองว่า transaction เข้ามาให้ระบบตรวจทีละใบ
-// สีตอนนี้บอก "ความรุนแรง" ของส่วนต่างราคาอย่างเดียว (ไม่บอกทิศทาง undervalue/overvalue แล้ว — ดูทิศทางได้
-// ตอนเปิดรายละเอียด/drawer แทน — ดู webapp/main.py._severity/_row_view)
+// สีตอนนี้บอก "ระดับคะแนนความเสี่ยง" 0-100 ของแถวนั้น (0-45 เขียว / 46-75 เหลือง / 76+ แดง) ไม่ได้บอกทิศทาง
+// undervalue/overvalue — ดูทิศทาง + ที่มาของคะแนนได้ตอนเปิดรายละเอียด/drawer (ดู webapp/risk.py,
+// webapp/main.py._row_view)
 const STATUS_LABEL={red:'แดง',yellow:'เหลือง',green:'เขียว',no_model:'No Model',new_cluster:'New Cluster'};
 const GUARD_MSG={
-  red:'🚩 แดง',
-  yellow:'🔶 เหลือง',
-  green:'✓ เขียว',
+  red:'🚩 แดง — ความเสี่ยงสูง',
+  yellow:'🔶 เหลือง — ความเสี่ยงปานกลาง',
+  green:'✓ เขียว — ความเสี่ยงต่ำ',
   no_model:'⚪ ยังไม่มีพิกัดนี้ในข้อมูล train',
   new_cluster:'🔵 train แล้ว แต่เจอ cluster ใหม่',
 };
@@ -101,7 +102,7 @@ function rowHtml(r){
     <td class="r mono">${r.price_per_kg}</td>
     <td class="r mono">${r.group_mean_kg ?? '-'}</td>
     <td class="l"><div class="tprofile">${r.gdsdscth}</div></td>
-    <td class="r">${r.diff_score === '-' ? '-' : `<span class="score-badge ${r.status}">${r.diff_score}</span>`}</td>
+    <td class="r">${r.risk_score === '-' ? '-' : `<span class="score-badge ${r.status}">${r.risk_score}</span>`}</td>
     <td><span class="status ${r.status}">${STATUS_LABEL[r.status]}</span></td>
   </tr>`;
 }

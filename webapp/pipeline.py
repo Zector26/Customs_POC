@@ -67,6 +67,7 @@ from clustering_core import (
     MODELS_DIR, build_text_for_embedding, heading_model_exists, load_embedder, load_heading_model,
     predict_new_item,
 )
+from webapp import risk
 
 # oracledb (thin mode, default) ปฏิเสธ user บาง Oracle จริงที่เก็บรหัสผ่านด้วย password verifier แบบเก่า
 # (พบจริง: DPY-3015 "password verifier type 0x939 is not supported ... in thin mode" — verifier ยุค
@@ -131,12 +132,20 @@ TEST_DB_PATH = "data/test_run.duckdb"
 # ที่ใช้ตัดสิน undervalue/overvalue ตรงนี้จะไม่ตรงกับที่คำนวณไว้ตอนเทรน
 PREDICT_ALERT_RATIO = 0.5
 
-# คอลัมน์ผลพยากรณ์ต่อ DECL_ID (ไม่รวม DECL_ID/MODEL_MTIME เอง) — ใช้ทั้งตอนอ่าน/เขียน test_predictions
-# และตอน update แถวใน DataFrame ให้ตรงชุดกันเป๊ะทุกที่ที่อ้างถึง
+# คอลัมน์ผลพยากรณ์ต่อ DECL_ID (ไม่รวม DECL_ID/MODEL_MTIME/RISK_VERSION เอง) — ใช้ทั้งตอนอ่าน/เขียน
+# test_predictions และตอน update แถวใน DataFrame ให้ตรงชุดกันเป๊ะทุกที่ที่อ้างถึง
+#
+# GROUP_COUNT/GROUP_STD_*/GROUP_N_WITH_WEIGHT เก็บ "คุณภาพของฐานราคาอ้างอิง" ที่ใช้ตัดสินแถวนี้ (มีอยู่ใน
+# group_stats ของโมเดลตอนเทรนอยู่แล้ว แค่เดิมไม่ได้ก๊อปมาเก็บต่อแถว) — ชั้นให้คะแนนความเสี่ยงต้องใช้ และการเก็บ
+# ไว้ตรงนี้ทำให้คิดคะแนนใหม่ได้โดยไม่ต้องโหลดโมเดล/คำนวณ embedding ซ้ำเลย (ดู webapp/risk.py)
+# RISK_SCORE/RISK_TIER คือผลลัพธ์ของชั้นนั้น — persist ไว้เพื่อให้ KPI "ทั้งระบบ" นับด้วย SQL ได้ตรงๆ ไม่ต้อง
+# ดึงทุกแถวเข้า Python มาคิดคะแนนใหม่ทุกครั้งที่มีคนเปิดหน้าเว็บ (ดู _system_wide_stats)
 PREDICTION_COLUMNS = [
     "TOPIC", "NO_REF_REASON", "ALERT_STATUS", "ALERT_METRIC", "GROUP_MEAN_CIFVALTHB",
     "ALERT_THRESHOLD_LOW_CIFVALTHB", "ALERT_THRESHOLD_HIGH_CIFVALTHB",
     "GROUP_MEAN_PRICE_PER_KG", "ALERT_THRESHOLD_LOW_PRICE_PER_KG", "ALERT_THRESHOLD_HIGH_PRICE_PER_KG",
+    "GROUP_COUNT", "GROUP_STD_CIFVALTHB", "GROUP_STD_PRICE_PER_KG", "GROUP_N_WITH_WEIGHT",
+    "RISK_SCORE", "RISK_TIER",
 ]
 # ค่า MODEL_MTIME ตอนที่ heading ไม่มีโมเดลเทรนไว้เลย (แยกจาก mtime จริงซึ่งเป็น float บวกเสมอ) — ถ้าเทรน
 # โมเดลของ heading นี้เสร็จใหม่ทีหลัง ค่าจริงจะไม่ตรงกับ sentinel นี้ ทำให้ผลพยากรณ์เก่าที่แคชไว้ตอนยังไม่มี
@@ -411,7 +420,11 @@ def _declarations_needing_prediction(con, embedder, models_dir: Path) -> pd.Data
     ใหม่หลังจากนั้น" (MODEL_MTIME ไม่ตรงกับปัจจุบัน) ผ่าน anti-join ใน SQL (หลักการเดียวกับ _sync_from_oracle
     ข้างบน) แทนการดึงทุกแถวที่เคยสะสมมาทั้งหมดเข้า Python มาวนเช็ค cache ทีละแถว — ยิ่งข้อมูลสะสมมากขึ้นเรื่อยๆ
     (ส่วนใหญ่ cache hit อยู่แล้วทั้งนั้น) การดึง+วนลูปทั้งหมดทุกครั้งที่มีคนเปิด/รีเฟรชหน้าเว็บจะยิ่งช้า/กิน RAM
-    มากขึ้นแบบไม่มี bound — ดึงมาเฉพาะแถวที่ต้องพยากรณ์จริงๆเท่านั้น"""
+    มากขึ้นแบบไม่มี bound — ดึงมาเฉพาะแถวที่ต้องพยากรณ์จริงๆเท่านั้น
+
+    รวมแถวที่ "คิดคะแนนความเสี่ยงไว้ด้วยสูตรเวอร์ชันเก่า" (RISK_VERSION ไม่ตรง) เข้ามาด้วย เพื่อให้การแก้สูตร
+    ใน webapp/risk.py มีผลกับแถวที่สะสมไว้แล้วเองโดยอัตโนมัติ — แถวกลุ่มนี้ไม่ได้ถูก predict ใหม่จริง
+    _ensure_predicted จะเข้าทาง cache hit แล้วคิดคะแนนใหม่ในหน่วยความจำเฉยๆ (ดู _save_risk)"""
     heading_mtimes = _headings_with_mtime(con, embedder, models_dir)
     con.register("_heading_mtimes", heading_mtimes)
     result = con.execute("""
@@ -419,8 +432,10 @@ def _declarations_needing_prediction(con, embedder, models_dir: Path) -> pd.Data
         JOIN sync_log s ON d.DECL_ID = s.DECL_ID
         LEFT JOIN test_predictions p ON d.DECL_ID = p.DECL_ID
         LEFT JOIN _heading_mtimes h ON d.HEADING = h.HEADING
-        WHERE p.DECL_ID IS NULL OR p.MODEL_MTIME IS DISTINCT FROM h.MODEL_MTIME
-    """).df()
+        WHERE p.DECL_ID IS NULL
+           OR p.MODEL_MTIME IS DISTINCT FROM h.MODEL_MTIME
+           OR p.RISK_VERSION IS DISTINCT FROM ?
+    """, [risk.RISK_VERSION]).df()
     con.unregister("_heading_mtimes")
     return result
 
@@ -442,7 +457,9 @@ def _ensure_predictions_schema(con) -> None:
     ไม่ใช่ผลตัดสิน undervalue/overvalue) — เก็บไว้กัน predict_new_item() ถูกเรียกซ้ำกับแถวเดิมทุกครั้งที่มี
     คนเปิด/รีเฟรชหน้าเว็บ (ดู module docstring) MODEL_MTIME ใช้เช็คว่าผลที่แคชไว้ยังตรงกับโมเดลปัจจุบันของ
     heading นั้นหรือไม่ — ถ้า heading นั้นถูกเทรนทับใหม่ (mtime เปลี่ยน) แถวที่แคชไว้ด้วย mtime เก่าจะถือว่า
-    stale ต้องพยากรณ์ใหม่อัตโนมัติ (ดู _heading_state/run)"""
+    stale ต้องพยากรณ์ใหม่อัตโนมัติ (ดู _heading_state/run) RISK_VERSION ทำหน้าที่เดียวกันแต่กับสูตรให้คะแนน
+    ความเสี่ยง — ถ้าสูตรใน webapp/risk.py ถูกแก้ (bump RISK_VERSION) แถวที่คิดคะแนนไว้ด้วยสูตรเก่าจะถือว่า
+    stale เหมือนกัน แต่คิดใหม่ได้ถูกกว่ามาก (ไม่ต้องแตะ BERTopic/embedding เลย — ดู _ensure_predicted)"""
     con.execute("""
         CREATE TABLE IF NOT EXISTS test_predictions (
             DECL_ID VARCHAR PRIMARY KEY,
@@ -459,6 +476,28 @@ def _ensure_predictions_schema(con) -> None:
             ALERT_THRESHOLD_HIGH_PRICE_PER_KG DOUBLE
         )
     """)
+    # คอลัมน์ที่เพิ่มทีหลัง — DB ไฟล์เดิมที่ผู้ใช้มีอยู่แล้วจะไม่ถูกสร้างใหม่จาก CREATE TABLE ข้างบน ต้อง
+    # ALTER เติมเอง (แพตเทิร์นเดียวกับ db.init_schema) เช็คจาก duckdb_columns() ก่อนว่าขาดอันไหนจริง เพื่อรู้ว่า
+    # "เพิ่งเติมคอลัมน์รอบนี้" หรือไม่ — ฟังก์ชันนี้ถูกเรียกทุก request ถ้ายิง DELETE ล้าง cache ทิ้งท้ายทุกครั้ง
+    # จะกลายเป็นสแกนตารางเปล่าๆทุก request ทั้งที่ต้องทำครั้งเดียวตอน migrate เท่านั้น
+    existing = {r[0] for r in con.execute(
+        "SELECT column_name FROM duckdb_columns() WHERE table_name = 'test_predictions'").fetchall()}
+    added = False
+    for col_name, col_type in [
+        ("GROUP_COUNT", "INTEGER"), ("GROUP_STD_CIFVALTHB", "DOUBLE"), ("GROUP_STD_PRICE_PER_KG", "DOUBLE"),
+        ("GROUP_N_WITH_WEIGHT", "INTEGER"), ("RISK_SCORE", "INTEGER"), ("RISK_TIER", "VARCHAR"),
+        ("RISK_VERSION", "INTEGER"),
+    ]:
+        if col_name not in existing:
+            con.execute(f"ALTER TABLE test_predictions ADD COLUMN {col_name} {col_type}")
+            added = True
+    if added:
+        # แถวที่แคชไว้ก่อนมีคอลัมน์พวกนี้ คิดคะแนนความเสี่ยงจาก cache เฉยๆไม่ได้ เพราะ input ของสูตร (สถิติ
+        # ของกลุ่มอ้างอิง) หายไปครึ่งหนึ่ง — ลบเฉพาะแถวที่มีฐานราคาอ้างอิงจริง (NO_REF_REASON IS NULL) ให้ถูก
+        # พยากรณ์ใหม่รอบถัดไป embedding ยังอยู่ใน text_embedding_cache ต้นทุนจริงเหลือแค่ BERTopic transform
+        # (แถว no_model/new_cluster ไม่ต้องลบ ไม่มีคะแนนให้คิดตั้งแต่แรก) ต่างจากกรณี RISK_VERSION ไม่ตรง ที่
+        # input ครบอยู่แล้ว คิดคะแนนใหม่ในหน่วยความจำได้เลยไม่ต้องพยากรณ์ซ้ำ (ดู _ensure_predicted)
+        con.execute("DELETE FROM test_predictions WHERE NO_REF_REASON IS NULL")
 
 
 def _system_wide_stats(con) -> dict:
@@ -469,37 +508,23 @@ def _system_wide_stats(con) -> dict:
     declarations ยังไม่เคยถูกเปิดดู/พยากรณ์เลย (เช่น อยู่หน้าอื่นที่ยังไม่มีใครกดไปดู) จะไม่ถูกนับรวมด้วย —
     ถูกต้องตามความหมายจริงของคำว่า "ประมวลผลแล้ว" ไม่ใช่แค่ "มีอยู่ใน declarations" เฉยๆ
 
-    n_green/yellow/red_total คือ "ความรุนแรง" ของส่วนต่างราคา (ไม่ใช่ทิศทาง undervalue/overvalue อีกต่อไป —
-    ดู webapp/main.py._severity) เขียว = ALERT_STATUS='normal' พอดี (deviation < 50% อยู่แล้วโดยนิยาม) เหลือง/
-    แดง คำนวณจาก deviation_pct ที่นี่ตรงๆ (สูตรเดียวกับ webapp/main.py._ai_signal เลือก metric ตาม
-    ALERT_METRIC) เพื่อให้ KPI ที่หน้าเว็บตรงกับสีที่แต่ละแถวโชว์จริง"""
+    n_green/yellow/red_total นับจาก RISK_TIER ที่ชั้นให้คะแนนความเสี่ยงคิดไว้แล้วต่อแถว (0-45 เขียว / 46-75
+    เหลือง / 76-100 แดง — ดู webapp/risk.py) ไม่ได้คำนวณเกณฑ์ซ้ำใน SQL ที่นี่ ทำให้ตัวเลข KPI ตรงกับสี/คะแนน
+    ที่แต่ละแถวโชว์จริงโดยไม่ต้องไล่ sync สูตร 2 ที่ (เดิมที่นี่คิด deviation_pct เองซ้ำกับฝั่ง Python)
+    RISK_TIER ของแถวที่ไม่มีฐานราคาอ้างอิงเป็น 'no_model'/'new_cluster' อยู่แล้ว จึงนับ bucket พวกนั้นจาก
+    คอลัมน์เดียวกันได้เลย ไม่ต้องแยกอ่าน NO_REF_REASON"""
     row = con.execute("""
-        WITH scored AS (
-            SELECT
-                p.NO_REF_REASON, p.ALERT_STATUS,
-                ABS(
-                    CASE
-                        WHEN p.ALERT_METRIC = 'price_per_kg' AND d.WGT_KG IS NOT NULL AND d.WGT_KG > 0
-                             AND p.GROUP_MEAN_PRICE_PER_KG IS NOT NULL AND p.GROUP_MEAN_PRICE_PER_KG > 0
-                            THEN (d.CIFVALTHB / d.WGT_KG) / p.GROUP_MEAN_PRICE_PER_KG * 100
-                        WHEN p.GROUP_MEAN_CIFVALTHB IS NOT NULL AND p.GROUP_MEAN_CIFVALTHB > 0
-                            THEN d.CIFVALTHB / p.GROUP_MEAN_CIFVALTHB * 100
-                        ELSE NULL
-                    END - 100
-                ) AS deviation_pct
-            FROM declarations d
-            JOIN test_predictions p ON d.DECL_ID = p.DECL_ID
-        )
         SELECT
             count(*) AS n_processed_total,
-            sum(CASE WHEN NO_REF_REASON = 'no_model' THEN 1 ELSE 0 END) AS n_no_model_total,
-            sum(CASE WHEN NO_REF_REASON = 'new_cluster' THEN 1 ELSE 0 END) AS n_new_cluster_total,
-            sum(CASE WHEN ALERT_STATUS = 'normal' THEN 1 ELSE 0 END) AS n_green_total,
-            sum(CASE WHEN ALERT_STATUS IN ('undervalue', 'overvalue') AND deviation_pct BETWEEN 50 AND 80
-                     THEN 1 ELSE 0 END) AS n_yellow_total,
-            sum(CASE WHEN ALERT_STATUS IN ('undervalue', 'overvalue') AND deviation_pct > 80
-                     THEN 1 ELSE 0 END) AS n_red_total
-        FROM scored
+            -- COALESCE เผื่อแถวที่แคชไว้ก่อนมีคอลัมน์ RISK_* และยังไม่ถูกคิดคะแนนใหม่ (รอบพื้นหลังไล่ตามอยู่ ดู
+            -- _declarations_needing_prediction) — 2 bucket นี้อ่านจาก NO_REF_REASON ได้ตรงๆอยู่แล้ว ไม่ต้องรอ
+            sum(CASE WHEN COALESCE(RISK_TIER, NO_REF_REASON) = 'no_model' THEN 1 ELSE 0 END) AS n_no_model_total,
+            sum(CASE WHEN COALESCE(RISK_TIER, NO_REF_REASON) = 'new_cluster' THEN 1 ELSE 0 END) AS n_new_cluster_total,
+            sum(CASE WHEN RISK_TIER = 'green' THEN 1 ELSE 0 END) AS n_green_total,
+            sum(CASE WHEN RISK_TIER = 'yellow' THEN 1 ELSE 0 END) AS n_yellow_total,
+            sum(CASE WHEN RISK_TIER = 'red' THEN 1 ELSE 0 END) AS n_red_total
+        FROM test_predictions p
+        JOIN declarations d ON d.DECL_ID = p.DECL_ID
     """).fetchone()
     cols = [
         "n_processed_total", "n_no_model_total", "n_new_cluster_total",
@@ -528,12 +553,22 @@ def _load_cached_predictions(con, decl_ids: list[str]) -> dict[str, dict]:
 def _save_prediction(con, decl_id: str, model_mtime: float, fields: dict) -> None:
     """บันทึก/อัปเดตผลพยากรณ์ของ DECL_ID นี้ลง test_predictions — ครั้งถัดไปที่แถวนี้โผล่มาอีก (คนละหน้า/
     คนละรอบ refresh) จะอ่านจาก cache นี้ได้เลยไม่ต้องพยากรณ์ซ้ำ ตราบใดที่โมเดลของ heading นี้ยังไม่เปลี่ยน
-    (เทียบด้วย model_mtime — ดู _heading_state)"""
+    (เทียบด้วย model_mtime — ดู _heading_state) และสูตรให้คะแนนความเสี่ยงยังเป็นเวอร์ชันเดิม (RISK_VERSION)"""
     con.execute("DELETE FROM test_predictions WHERE DECL_ID = ?", [decl_id])
     con.execute(f"""
-        INSERT INTO test_predictions (DECL_ID, MODEL_MTIME, {", ".join(PREDICTION_COLUMNS)})
-        VALUES (?, ?, {", ".join(["?"] * len(PREDICTION_COLUMNS))})
-    """, [decl_id, model_mtime] + [fields[c] for c in PREDICTION_COLUMNS])
+        INSERT INTO test_predictions (DECL_ID, MODEL_MTIME, RISK_VERSION, {", ".join(PREDICTION_COLUMNS)})
+        VALUES (?, ?, ?, {", ".join(["?"] * len(PREDICTION_COLUMNS))})
+    """, [decl_id, model_mtime, risk.RISK_VERSION] + [fields[c] for c in PREDICTION_COLUMNS])
+
+
+def _save_risk(con, decl_id: str, fields: dict) -> None:
+    """อัปเดตแค่คะแนนความเสี่ยงของแถวที่ผลพยากรณ์เดิมยังใช้ได้อยู่ (โมเดลไม่เปลี่ยน) แต่คิดคะแนนไว้ด้วยสูตร
+    เวอร์ชันเก่า — ไม่ต้อง predict ใหม่ทั้งแถว (ดู _ensure_predicted) เพราะ input ของสูตรถูกเก็บไว้ในแถวนั้น
+    ครบแล้ว การคิดใหม่เป็น pure function ในหน่วยความจำล้วนๆ ไม่แตะ BERTopic/embedding เลย"""
+    con.execute(
+        "UPDATE test_predictions SET RISK_SCORE = ?, RISK_TIER = ?, RISK_VERSION = ? WHERE DECL_ID = ?",
+        [fields["RISK_SCORE"], fields["RISK_TIER"], risk.RISK_VERSION, decl_id],
+    )
 
 
 def _predict_row(con, d: pd.Series, model_obj, group_stats, embedder) -> dict:
@@ -557,27 +592,46 @@ def _predict_row(con, d: pd.Series, model_obj, group_stats, embedder) -> dict:
     if stats is None:
         # heading นี้เทรนไว้แล้ว แต่รายการนี้ไม่เข้ากลุ่มใดที่มีสถิติราคาอ้างอิง (noise หรือ topic ที่ยังไม่
         # เคยเห็นตอนเทรน) — คือ "เจอ cluster ใหม่" ไม่ใช่ "ไม่มีพิกัดนี้ในข้อมูล train"
-        return dict(
+        return _with_risk(d, dict(
+            _NO_REF_GROUP_FIELDS,
             TOPIC=pred["topic"], NO_REF_REASON="new_cluster", ALERT_STATUS=None, ALERT_METRIC=None,
-            GROUP_MEAN_CIFVALTHB=None, ALERT_THRESHOLD_LOW_CIFVALTHB=None, ALERT_THRESHOLD_HIGH_CIFVALTHB=None,
-            GROUP_MEAN_PRICE_PER_KG=None, ALERT_THRESHOLD_LOW_PRICE_PER_KG=None,
-            ALERT_THRESHOLD_HIGH_PRICE_PER_KG=None,
-        )
+        ))
     threshold_low, threshold_high = _thresholds(stats["mean_price"])
     threshold_low_kg, threshold_high_kg = _thresholds(stats.get("mean_price_per_kg"))
-    return dict(
+    return _with_risk(d, dict(
         TOPIC=pred["topic"], NO_REF_REASON=None, ALERT_STATUS=pred["status"], ALERT_METRIC=pred.get("alert_metric"),
         GROUP_MEAN_CIFVALTHB=stats["mean_price"],
         ALERT_THRESHOLD_LOW_CIFVALTHB=threshold_low, ALERT_THRESHOLD_HIGH_CIFVALTHB=threshold_high,
         GROUP_MEAN_PRICE_PER_KG=stats.get("mean_price_per_kg"),
         ALERT_THRESHOLD_LOW_PRICE_PER_KG=threshold_low_kg, ALERT_THRESHOLD_HIGH_PRICE_PER_KG=threshold_high_kg,
-    )
+        # คุณภาพของฐานราคาอ้างอิงที่ใช้ตัดสินแถวนี้ — ก๊อปมาจาก group_stats ของโมเดลตอนเทรนตรงๆ (std ของราคา
+        # ต่อกิโลจะเป็น None ถ้า heading นี้เทรนไว้ก่อนที่ db.persist_heading_result จะเริ่มเก็บค่านี้ —
+        # webapp/risk.py รับ None ได้ ใช้ตัวคูณความเชื่อมั่นกลางๆแทน ไม่ต้องบังคับเทรนใหม่)
+        GROUP_COUNT=stats.get("count"), GROUP_STD_CIFVALTHB=stats.get("std_price"),
+        GROUP_STD_PRICE_PER_KG=stats.get("std_price_per_kg"),
+        GROUP_N_WITH_WEIGHT=stats.get("n_with_weight"),
+    ))
 
+
+def _with_risk(d: pd.Series, fields: dict) -> dict:
+    """เติม RISK_SCORE/RISK_TIER ให้ชุดผลพยากรณ์ที่คิดเสร็จแล้ว — ชั้นให้คะแนนต้องเห็นทั้งฝั่ง declaration
+    (CIFVALTHB/WGT_KG) และฝั่งผลพยากรณ์ (สถานะ + สถิติกลุ่มอ้างอิง) พร้อมกัน จึงรวม 2 ฝั่งเป็น dict เดียวก่อน
+    ส่งเข้า risk.fields() (ดู webapp/risk.py — pure function ไม่แตะ DB/โมเดล)"""
+    return {**fields, **risk.fields({**d.to_dict(), **fields})}
+
+
+# คอลัมน์สถิติกลุ่มอ้างอิงทั้งชุดตอน "ไม่มีกลุ่มให้อ้างอิง" — ใช้ทั้งเคส new_cluster (เทรนแล้วแต่ไม่เข้ากลุ่ม)
+# และ no_model (ยังไม่เคยเทรน heading นี้) เพื่อไม่ต้องไล่เขียน None ซ้ำ 2 ที่แล้วหลุดคอลัมน์ใหม่ในอนาคต
+_NO_REF_GROUP_FIELDS = dict(
+    GROUP_MEAN_CIFVALTHB=None, ALERT_THRESHOLD_LOW_CIFVALTHB=None, ALERT_THRESHOLD_HIGH_CIFVALTHB=None,
+    GROUP_MEAN_PRICE_PER_KG=None, ALERT_THRESHOLD_LOW_PRICE_PER_KG=None, ALERT_THRESHOLD_HIGH_PRICE_PER_KG=None,
+    GROUP_COUNT=None, GROUP_STD_CIFVALTHB=None, GROUP_STD_PRICE_PER_KG=None, GROUP_N_WITH_WEIGHT=None,
+)
 
 _NO_MODEL_FIELDS = dict(
-    TOPIC=None, NO_REF_REASON="no_model", ALERT_STATUS=None, ALERT_METRIC=None, GROUP_MEAN_CIFVALTHB=None,
-    ALERT_THRESHOLD_LOW_CIFVALTHB=None, ALERT_THRESHOLD_HIGH_CIFVALTHB=None, GROUP_MEAN_PRICE_PER_KG=None,
-    ALERT_THRESHOLD_LOW_PRICE_PER_KG=None, ALERT_THRESHOLD_HIGH_PRICE_PER_KG=None,
+    _NO_REF_GROUP_FIELDS,
+    TOPIC=None, NO_REF_REASON="no_model", ALERT_STATUS=None, ALERT_METRIC=None,
+    RISK_SCORE=None, RISK_TIER="no_model",
 )
 
 
@@ -594,6 +648,7 @@ def _ensure_predicted(con, declarations: pd.DataFrame, embedder, models_dir: Pat
     n_no_model = 0
     n_new_cluster = 0
     n_cache_hit = 0
+    n_rescored = 0  # cache hit ที่ต้องคิดคะแนนความเสี่ยงใหม่เพราะสูตรเปลี่ยนเวอร์ชัน (ไม่ได้ predict ใหม่)
     headings_matched = set()
     heading_state_cache: dict[str, tuple] = {}  # กัน _heading_state ถูกเรียกซ้ำหลายรอบต่อ heading เดียวกัน
     # ภายในการเรียกครั้งนี้ครั้งเดียว (declarations มักมีหลายแถวต่อ heading เดียวกัน)
@@ -614,6 +669,12 @@ def _ensure_predicted(con, declarations: pd.DataFrame, embedder, models_dir: Pat
             # embedding/BERTopic เลย
             row.update({c: cached_pred[c] for c in PREDICTION_COLUMNS})
             n_cache_hit += 1
+            if cached_pred["RISK_VERSION"] != risk.RISK_VERSION:
+                # สูตรให้คะแนนความเสี่ยงถูกแก้หลังจากแถวนี้ถูกคิดคะแนนไว้ — คิดใหม่จาก input ที่แคชไว้แล้ว
+                # (ถูกกว่าการ predict ใหม่ทั้งแถวหลายเท่า ดู _save_risk) ผลพยากรณ์ส่วนอื่นไม่ต้องแตะเลย
+                row.update(risk.fields(row))
+                _save_risk(con, decl_id, row)
+                n_rescored += 1
         else:
             fields = dict(_NO_MODEL_FIELDS) if model_obj is None else _predict_row(con, d, model_obj, group_stats, embedder)
             row.update(fields)
@@ -630,6 +691,7 @@ def _ensure_predicted(con, declarations: pd.DataFrame, embedder, models_dir: Pat
     return {
         "rows_by_id": rows_by_id,
         "n_cache_hit": n_cache_hit,
+        "n_rescored": n_rescored,
         "n_newly_predicted": len(declarations) - n_cache_hit,
         "n_headings_matched": len(headings_matched),
         "n_no_model": n_no_model,
@@ -730,6 +792,7 @@ def run(since_ts=None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, after:
     summary = {
         "n_rows": n_rows,
         "n_cache_hit": result["n_cache_hit"],
+        "n_rescored": result["n_rescored"],
         "n_newly_predicted": result["n_newly_predicted"],
         "n_headings_seen": int(declarations["HEADING"].nunique()) if n_rows else 0,
         "n_headings_matched": result["n_headings_matched"],
@@ -750,7 +813,8 @@ def run(since_ts=None, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE, after:
     }
     log(
         f"[pipeline] เสร็จสิ้น — {n_rows} แถว (หน้า {page}/{total_pages}, รวมทั้งระบบ {total_rows} แถว), "
-        f"ใช้ cache {result['n_cache_hit']} แถว พยากรณ์ใหม่จริง {result['n_newly_predicted']} แถว, "
+        f"ใช้ cache {result['n_cache_hit']} แถว (คิดคะแนนความเสี่ยงใหม่ {result['n_rescored']} แถว), "
+        f"พยากรณ์ใหม่จริง {result['n_newly_predicted']} แถว, "
         f"มีโมเดลอ้างอิงตรง {result['n_headings_matched']} heading, "
         f"ยังไม่มีพิกัดในข้อมูล train {result['n_no_model']} แถว, "
         f"เทรนแล้วแต่เจอ cluster ใหม่ {result['n_new_cluster']} แถว, flag ผิดปกติ {result['n_flagged']} แถว"

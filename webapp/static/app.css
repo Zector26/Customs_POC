@@ -136,6 +136,49 @@ table.grid{width:100%;border-collapse:collapse;font-size:13px}
 .guard.ok{border-left-color:var(--green);background:var(--green-bg);color:#16713c}
 .guard.new{border-left-color:var(--purple);background:var(--purple-bg);color:#4c1d95}
 
+/* การ์ด "วิธีที่ใช้ประเมิน" + ตารางแต้มความเสี่ยงใน drawer (ดู webapp/templates/detail.html, webapp/risk.py) */
+.score-badge.big{font-size:20px;padding:7px 18px;border-radius:18px}
+.mlnote{font-size:11.5px;color:var(--muted);line-height:1.55;margin:2px 0 8px}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px}
+.chip{font-size:11.5px;font-weight:600;padding:5px 12px;border-radius:14px;border:1px solid var(--line);
+  color:var(--muted);background:#fff;white-space:nowrap}
+.chip.on{background:#6d28d9;border-color:#6d28d9;color:#fff}
+.tasks{display:flex;flex-direction:column;gap:6px}
+.task{display:grid;grid-template-columns:18px 1fr auto auto;align-items:center;gap:8px;font-size:12px;
+  padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--line);border-radius:0 7px 7px 0;background:#fff}
+.task.found{border-left-color:var(--red);background:var(--red-bg)}
+.task.clear{border-left-color:var(--green)}
+.task.pending{border-left-color:var(--gray);background:#fafbfc}
+.task-l{font-weight:600;color:var(--ink)}
+.task-tech{font-size:10.5px;color:#4c1d95;background:var(--purple-bg);padding:3px 8px;border-radius:10px;white-space:nowrap}
+.task-st{font-size:11px;font-weight:700;color:var(--muted);white-space:nowrap;min-width:62px;text-align:right}
+.task.found .task-st{color:var(--red)}
+.mlfoot{margin-top:10px;font-size:11.5px;font-weight:600;color:#4c1d95;background:var(--purple-bg);
+  border:1px dashed #c4b5fd;border-radius:7px;padding:7px 10px;text-align:center;line-height:1.5}
+
+.fbd{display:flex;flex-direction:column;gap:2px;margin-bottom:10px}
+.fbd-row{display:grid;grid-template-columns:1fr 90px 62px;align-items:center;gap:10px;padding:7px 4px;
+  border-bottom:1px dotted #e7ecf2}
+.fbd-name{font-size:12px;font-weight:600;color:var(--ink);line-height:1.4}
+.fbd-sub{font-size:10.5px;color:var(--muted);line-height:1.45;margin-top:2px}
+.fbd-row.off .fbd-name{font-weight:500;color:var(--muted)}
+.fbd-bar{height:7px;border-radius:4px;background:#eef2f7;overflow:hidden}
+.fbd-bar>span{display:block;height:100%;border-radius:4px;background:#2563eb}
+.fbd-pt{font-size:12.5px;font-weight:700;text-align:right;white-space:nowrap}
+.fbd-row.off .fbd-pt{color:var(--muted)}
+.fbd-max{font-size:10.5px;font-weight:500;color:var(--muted)}
+/* คะแนนดิบรวม = เส้นแบ่งครึ่งตาราง, แถวตัวคูณความเชื่อมั่น (สีม่วง) = ส่วนที่ "หัก" คะแนนดิบลงมาเป็นสุทธิ */
+.fbd-row.sum{background:#f6f8fb;border-top:1px solid var(--line)}
+.fbd-row.sum .fbd-name,.fbd-row.total .fbd-name{font-weight:700}
+.fbd-row.mul .fbd-name{font-weight:500;color:#4c1d95}
+.fbd-row.mul .fbd-bar>span{background:#a78bfa}
+.fbd-row.mul .fbd-pt{color:#6d28d9}
+.fbd-row.total{border-top:1px solid var(--line);border-bottom:0;margin-top:4px;padding-top:9px}
+.fbd-row.total .fbd-pt{font-size:15px}
+.fbd-row.total .fbd-bar>span{background:var(--navy)}
+@media(max-width:680px){.fbd-row{grid-template-columns:1fr 56px}.fbd-bar{display:none}
+  .task{grid-template-columns:18px 1fr auto}.task-tech{display:none}}
+
 .foot{text-align:center;color:var(--muted);font-size:11.5px;padding:18px}
 
 .pagination{display:flex;align-items:center;justify-content:center;gap:16px;padding:14px;font-size:12.5px}

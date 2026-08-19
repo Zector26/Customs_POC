@@ -35,16 +35,90 @@
     <div><label>ตัวชี้วัดที่ใช้เทียบ</label><span>{{ 'ราคาต่อกิโลกรัม' if r.alert_metric == 'price_per_kg' else 'มูลค่ารวม (CIF)' }}</span></div>
     {% endif %}
   </div>
+  {# ใช้ r.status (ระดับคะแนนความเสี่ยง) เลือกสี/ไอคอนของ guard และบอกคะแนนตรงๆ ไม่พูดถึง "ระดับความรุนแรง"
+     จากส่วนต่าง % อย่างเดียวอีกต่อไป เพราะสีมาจากคะแนนรวมที่คิดส่วนต่างเป็นเงิน + ความเชื่อมั่นของฐานราคาด้วย
+     (ดู webapp/risk.py) — การ์ด "คะแนนความเสี่ยง" ข้างล่างแจกแจงที่มาของคะแนนไว้ครบแล้ว #}
   {% if r.alert_status == 'undervalue' %}
-  <div class="guard {{ 'block' if r.status == 'red' else 'warn' }}">{{ '🚩' if r.status == 'red' else '🔶' }} มูลค่าที่สำแดงต่ำกว่า threshold ต่ำของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาต่ำผิดปกติ (Undervalue) ระดับ{{ 'รุนแรง (ส่วนต่างมากกว่า 80%)' if r.status == 'red' else 'ปานกลาง (ส่วนต่าง 50-80%)' }}</div>
+  <div class="guard {{ 'block' if r.status == 'red' else ('warn' if r.status == 'yellow' else 'ok') }}">{{ '🚩' if r.status == 'red' else ('🔶' if r.status == 'yellow' else '✓') }} มูลค่าที่สำแดงต่ำกว่า threshold ต่ำของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาต่ำผิดปกติ (Undervalue) คะแนนความเสี่ยงรวม {{ r.risk.score }}/100 ({{ r.risk.tier_label }})</div>
   {% elif r.alert_status == 'overvalue' %}
-  <div class="guard {{ 'block' if r.status == 'red' else 'warn' }}">{{ '🚩' if r.status == 'red' else '🔶' }} มูลค่าที่สำแดงสูงกว่า threshold สูงของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาสูงผิดปกติ (Overvalue) ระดับ{{ 'รุนแรง (ส่วนต่างมากกว่า 80%)' if r.status == 'red' else 'ปานกลาง (ส่วนต่าง 50-80%)' }}</div>
+  <div class="guard {{ 'block' if r.status == 'red' else ('warn' if r.status == 'yellow' else 'ok') }}">{{ '🚩' if r.status == 'red' else ('🔶' if r.status == 'yellow' else '✓') }} มูลค่าที่สำแดงสูงกว่า threshold สูงของกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้) — สงสัยว่าสำแดงราคาสูงผิดปกติ (Overvalue) คะแนนความเสี่ยงรวม {{ r.risk.score }}/100 ({{ r.risk.tier_label }})</div>
   {% elif r.alert_status == 'normal' %}
   <div class="guard ok">✓ มูลค่าที่สำแดงอยู่ในช่วงปกติเมื่อเทียบกับกลุ่มสินค้าเดียวกัน (เทียบกับโมเดลที่ขา train เทรนไว้)</div>
   {% elif r.status == 'new_cluster' %}
   <div class="guard new">🔵 พิกัดนี้เทรนไว้แล้ว แต่รายการนี้ไม่เข้ากลุ่มใดที่มีสถิติราคาอ้างอิง (อาจเป็นกลุ่มสินค้าใหม่ที่ยังไม่เคยเห็นตอนเทรน) ยังตัดสิน undervalue/overvalue ไม่ได้</div>
   {% else %}
   <div class="guard">⚪ ยังตัดสินไม่ได้ — พิกัดนี้ยังไม่มีในข้อมูลที่ขา train เคยเทรนเลย (ยังไม่เคยเทรน หรือเทรนจากข้อมูลที่ไม่มีพิกัดนี้) ต้องรัน/รอผลขา train ก่อนถึงจะประเมินรายการนี้ได้</div>
+  {% endif %}
+</div>
+
+{# วิธีที่ AI/ML ใช้ประเมิน — บอกว่าใช้เทคนิคอะไร สแกนภารกิจอะไรไปแล้วบ้าง และแต่ละด้านได้ผลอะไร ก่อนจะไป
+   เห็นตารางแต้มข้างล่าง สถานะ "ยังไม่ประเมิน" (pending) แยกจาก "ปกติ" (clear) โดยตั้งใจ — ด้านที่ยังไม่มี
+   ข้อมูลให้ตรวจ ต้องไม่แสดงเป็นผ่านการตรวจแล้ว (ดู webapp/risk.py _tasks) #}
+<div class="card">
+  <div class="card-h">⚙ AI/ML — วิธีที่ใช้ประเมิน</div>
+  <div class="mlnote">เทคนิคที่โมเดลใช้ (ไฮไลต์ = ทำงานกับใบนี้)</div>
+  <div class="chips">
+    {% for t in r.risk.techniques %}
+    <span class="chip {{ 'on' if t.active else '' }}">{{ '●' if t.active else '○' }} {{ t.label }}</span>
+    {% endfor %}
+  </div>
+  <div class="mlnote">ภารกิจที่สแกน (4 ด้านหลัก + เอกสาร)</div>
+  <div class="tasks">
+    {% for t in r.risk.tasks %}
+    <div class="task {{ t.state }}">
+      <span class="task-ic">{% if t.state == 'found' %}🚩{% elif t.state == 'clear' %}✓{% else %}◌{% endif %}</span>
+      <span class="task-l">{{ t.label }}</span>
+      <span class="task-tech">{{ t.technique_label }}</span>
+      <span class="task-st">{{ t.state_label }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% if r.risk.score is not none %}
+  <div class="mlfoot">↓ สิ่งที่พบข้างต้น ถูกแปลงเป็น “แต้ม” ในตารางคะแนนด้านล่าง แล้วรวมเป็นคะแนน {{ r.risk.score }}/100</div>
+  {% else %}
+  <div class="mlfoot">↓ ยังให้คะแนนรวมไม่ได้ — ดูเหตุผลในหัวข้อถัดไป</div>
+  {% endif %}
+</div>
+
+{# ตารางแจกแจงคะแนน — ปัจจัยที่บวกคะแนน (เต็ม 100) แล้วคูณตัวคูณความเชื่อมั่นของฐานราคาอ้างอิงเป็นคะแนนสุทธิ
+   น้ำหนักแต่ละปัจจัยเป็นค่าตั้งต้นในโค้ด ไม่ได้เรียนจากข้อมูลจริง บอกไว้บนหัวตารางตรงๆ (ดู webapp/risk.py) #}
+<div class="card">
+  <div class="card-h">ผลรวมคะแนน ที่ AI/ML ประเมิน</div>
+  {% if r.risk.score is none %}
+  <div class="guard">⚪ {{ r.risk.note }}</div>
+  {% else %}
+  <div class="fbd">
+    {% for f in r.risk.factors %}
+    <div class="fbd-row {{ 'on' if f.points > 0 else 'off' }}" title="{{ f.detail }}">
+      <div class="fbd-l">
+        <div class="fbd-name">{{ f.label }}</div>
+        <div class="fbd-sub">{{ f.short }}</div>
+      </div>
+      <div class="fbd-bar"><span style="width:{{ (100 * f.points / f.max) | round(1) }}%"></span></div>
+      <div class="fbd-pt mono">{{ f.points | round | int }}<span class="fbd-max">/{{ f.max }}</span></div>
+    </div>
+    {% endfor %}
+    <div class="fbd-row sum">
+      <div class="fbd-l"><div class="fbd-name">คะแนนดิบรวม</div>
+        <div class="fbd-sub">ก่อนคูณความเชื่อมั่นของฐานราคาอ้างอิง</div></div>
+      <div class="fbd-bar"><span style="width:{{ r.risk.base | round(1) }}%"></span></div>
+      <div class="fbd-pt mono">{{ r.risk.base | round | int }}<span class="fbd-max">/100</span></div>
+    </div>
+    {% for f in r.risk.confidence_factors %}
+    <div class="fbd-row mul" title="{{ f.detail }}">
+      <div class="fbd-l"><div class="fbd-name">× {{ f.label }}</div>
+        <div class="fbd-sub">{{ f.detail }}</div></div>
+      <div class="fbd-bar"><span style="width:{{ (100 * f.factor) | round(1) }}%"></span></div>
+      <div class="fbd-pt mono">×{{ '%.2f'|format(f.factor) }}</div>
+    </div>
+    {% endfor %}
+    <div class="fbd-row total">
+      <div class="fbd-l"><div class="fbd-name">คะแนนรวม</div>
+        <div class="fbd-sub">{{ r.risk.tier_label }} — ความเชื่อมั่นรวม {{ r.risk.confidence_pct }}%</div></div>
+      <div class="fbd-bar"><span style="width:{{ r.risk.score }}%"></span></div>
+      <div class="fbd-pt mono">{{ r.risk.score }}<span class="fbd-max">/100</span></div>
+    </div>
+  </div>
   {% endif %}
 </div>
 

@@ -551,6 +551,14 @@ def persist_heading_result(
             "median_price": float(row["MEDIAN_PRICE"]),
             "count": int(row["N"]),
             "mean_price_per_kg": float(kg_row["MEAN_PRICE_PER_KG"]) if kg_row is not None else None,
+            # std/median ของราคาต่อกิโล — คำนวณอยู่ใน group_agg_kg มาตั้งแต่ต้นแต่เดิมไม่ได้เก็บลง group_stats
+            # ต้องเก็บด้วยเพราะชั้นให้คะแนนความเสี่ยงใช้ CV (std/mean) ของ metric ที่ใช้เทียบจริงเป็นตัวคูณ
+            # ความเชื่อมั่น (ดู webapp/risk.py) — ถ้าไม่มีจะต้องไปยืม CV ของมูลค่ารวมมาใช้แทน ซึ่งเพี้ยนเพราะ
+            # มูลค่ารวมกระจายตามปริมาณที่สั่งด้วย ไม่ใช่แค่ตามราคาต่อหน่วย โมเดลที่เทรนไว้ก่อนหน้านี้จะไม่มี
+            # 2 คีย์นี้ใน meta.json — ฝั่งที่อ่านต้องรับ None ได้เอง (risk.py ทำไว้แล้ว) ไม่ต้องบังคับเทรนใหม่
+            "std_price_per_kg": float(kg_row["STD_PRICE_PER_KG"])
+                if kg_row is not None and pd.notna(kg_row["STD_PRICE_PER_KG"]) else None,
+            "median_price_per_kg": float(kg_row["MEDIAN_PRICE_PER_KG"]) if kg_row is not None else None,
             "n_with_weight": int(kg_row["N_WITH_WEIGHT"]) if kg_row is not None else 0,
             "sample_items": samples_by_topic.get(topic_id, []),
         }
